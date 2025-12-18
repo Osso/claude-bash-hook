@@ -86,13 +86,18 @@ fn main() {
     // Analyze the command
     let result = analyze_command(&command, &config, edit_mode);
 
-    // Output the decision
+    // For "ask" permission, don't output anything - let Claude Code's built-in system handle it
+    if result.permission == Permission::Ask {
+        return;
+    }
+
+    // Output the decision for allow/deny
     let output = HookOutput {
         hook_output: HookSpecificOutput {
             event_name: "PreToolUse".to_string(),
             decision: match result.permission {
                 Permission::Allow => "allow".to_string(),
-                Permission::Ask => "ask".to_string(),
+                Permission::Ask => unreachable!(),
                 Permission::Deny => "deny".to_string(),
             },
             reason: format_reason(&command, &result),
