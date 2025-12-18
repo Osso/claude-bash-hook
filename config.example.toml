@@ -13,10 +13,15 @@ commands = [
     "ls", "cat", "head", "tail", "less", "more",
     "pwd", "whoami", "hostname", "uname", "id", "groups",
     "ps", "top", "htop", "df", "du", "free", "uptime", "date",
-    "grep", "find", "wc", "sort", "uniq", "which", "whereis", "file",
+    "grep", "find", "wc", "sort", "uniq", "which", "whereis", "file", "tr", "base64",
     "jq", "yq", "xq",
-    "cd", "echo", "mkdir", "cp", "mv",
+    "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln",
     "sed", "awk",  # sed -i requires edit mode
+    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof",
+    "sleep", "ping", "dig", "journalctl", "pgrep", "stat", "apt-cache", "tree", "printenv",
+    "php -l", "dpkg -l",
+    "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
+    "flatpak list", "npm run typecheck", "composer",
 ]
 permission = "allow"
 reason = "read-only commands"
@@ -38,15 +43,19 @@ reason = "force switch can discard changes"
 
 # Git switch/restore without force - allow
 [[rules]]
-commands = ["git switch", "git restore"]
+commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch"]
 permission = "allow"
 reason = "safe git operations"
 
-# Docker read-only
+# Docker read-only and safe operations
 [[rules]]
-commands = ["docker ps", "docker logs", "docker inspect", "docker images"]
+commands = [
+    "docker ps", "docker logs", "docker inspect", "docker images",
+    "docker pull", "docker build", "docker tag",
+    "docker compose ps", "docker compose logs",
+]
 permission = "allow"
-reason = "docker read-only"
+reason = "docker read-only and safe operations"
 
 # Docker destructive - ask
 [[rules]]
@@ -56,9 +65,156 @@ reason = "docker destructive"
 
 # Kubectl read-only
 [[rules]]
-commands = ["kubectl get", "kubectl describe", "kubectl logs"]
+commands = [
+    "kubectl get", "kubectl describe", "kubectl logs",
+    "kubectl explain", "kubectl api-resources", "kubectl top",
+    "kubectl rollout history", "kubectl rollout status",
+]
 permission = "allow"
 reason = "kubectl read-only"
+
+# UniFi read-only (all current subcommands)
+[[rules]]
+commands = [
+    "unifi internet", "unifi devices", "unifi networks", "unifi clients",
+    "unifi wifi", "unifi firewall", "unifi security", "unifi vpn", "unifi config",
+]
+permission = "allow"
+reason = "unifi read-only"
+
+# Sentry read-only
+[[rules]]
+commands = ["sentry issue", "sentry projects", "sentry issues"]
+permission = "allow"
+reason = "sentry read-only"
+
+# glab read-only
+[[rules]]
+commands = [
+    "glab mr list", "glab mr view",
+    "glab ci status", "glab ci list", "glab ci view", "glab ci trace",
+    "glab issue list", "glab issue view",
+    "glab repo view",
+]
+permission = "allow"
+reason = "glab read-only"
+
+# warp-cli allowed operations
+[[rules]]
+commands = ["warp-cli status", "warp-cli connect", "warp-cli disconnect", "warp-cli debug access-reauth"]
+permission = "allow"
+reason = "warp-cli safe operations"
+
+# gsettings read-only
+[[rules]]
+commands = ["gsettings get", "gsettings list-schemas", "gsettings list-keys", "gsettings list-recursively", "gsettings describe", "gsettings range"]
+permission = "allow"
+reason = "gsettings read-only"
+
+# dconf read-only
+[[rules]]
+commands = ["dconf read", "dconf list", "dconf dump"]
+permission = "allow"
+reason = "dconf read-only"
+
+# xdg-settings read-only
+[[rules]]
+commands = ["xdg-settings get", "xdg-settings check"]
+permission = "allow"
+reason = "xdg-settings read-only"
+
+# xdg-mime read-only
+[[rules]]
+commands = ["xdg-mime query"]
+permission = "allow"
+reason = "xdg-mime read-only"
+
+# ip read-only (show/list only)
+[[rules]]
+commands = [
+    "ip addr show", "ip address show", "ip link show", "ip route show",
+    "ip neigh show", "ip rule show", "ip netns list",
+]
+permission = "allow"
+reason = "ip read-only"
+
+# systemctl read-only
+[[rules]]
+commands = [
+    "systemctl status", "systemctl list-units", "systemctl list-unit-files",
+    "systemctl is-active", "systemctl is-enabled", "systemctl is-failed",
+    "systemctl show", "systemctl cat",
+]
+permission = "allow"
+reason = "systemctl read-only"
+
+# flux read-only and safe operations
+[[rules]]
+commands = ["flux get", "flux logs", "flux stats", "flux tree", "flux diff", "flux events", "flux reconcile"]
+permission = "allow"
+reason = "flux read-only and safe operations"
+
+# helm read-only
+[[rules]]
+commands = ["helm list", "helm status", "helm get", "helm show", "helm search", "helm history"]
+permission = "allow"
+reason = "helm read-only"
+
+# nmcli read-only
+[[rules]]
+commands = ["nmcli connection show", "nmcli device show", "nmcli device status", "nmcli general status", "nmcli general hostname"]
+permission = "allow"
+reason = "nmcli read-only"
+
+# resolvectl read-only
+[[rules]]
+commands = ["resolvectl status", "resolvectl query", "resolvectl statistics", "resolvectl dns", "resolvectl domain"]
+permission = "allow"
+reason = "resolvectl read-only"
+
+# terraform read-only
+[[rules]]
+commands = ["terraform show", "terraform state list", "terraform state show", "terraform output", "terraform plan", "terraform version", "terraform providers", "terraform validate"]
+permission = "allow"
+reason = "terraform read-only"
+
+# cargo dev commands
+[[rules]]
+commands = ["cargo check", "cargo build", "cargo test", "cargo run", "cargo doc", "cargo search", "cargo tree", "cargo metadata", "cargo fmt", "cargo clippy"]
+permission = "allow"
+reason = "cargo dev commands"
+
+# pacman read-only (query and search)
+[[rules]]
+commands = ["pacman -Q", "pacman -Qi", "pacman -Ql", "pacman -Qo", "pacman -Qs", "pacman -Ss", "pacman -Si", "pacman -Sg", "pacman -Sl", "pacman -F", "pacman -Fl"]
+permission = "allow"
+reason = "pacman read-only"
+
+# yay read-only (query and search)
+[[rules]]
+commands = ["yay -Q", "yay -Qi", "yay -Ql", "yay -Qo", "yay -Qs", "yay -Ss", "yay -Si", "yay -Sg", "yay -Ps"]
+permission = "allow"
+reason = "yay read-only"
+
+# brew read-only
+[[rules]]
+commands = ["brew list", "brew info", "brew search", "brew deps", "brew leaves", "brew outdated", "brew config", "brew doctor"]
+permission = "allow"
+reason = "brew read-only"
+
+# doctl read-only
+[[rules]]
+commands = [
+    "doctl account get", "doctl balance get", "doctl billing-history list",
+    "doctl compute droplet list", "doctl compute droplet get",
+    "doctl compute image list", "doctl compute region list", "doctl compute size list",
+    "doctl compute ssh-key list", "doctl compute volume list",
+    "doctl kubernetes cluster list", "doctl kubernetes cluster get",
+    "doctl databases list", "doctl databases get",
+    "doctl vpcs list", "doctl vpcs get",
+]
+permission = "allow"
+reason = "doctl read-only"
 
 # Recursive delete - deny
 [[rules]]
@@ -142,3 +298,7 @@ message = "Use the Glob tool or 'fd' for file search"
 [[suggestions]]
 command = "grep"
 message = "Use the Grep tool instead of grep/rg"
+
+[[suggestions]]
+command = "locate"
+message = "Use the Glob tool or 'fd' for file search"
