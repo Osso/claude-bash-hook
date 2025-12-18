@@ -4,6 +4,7 @@
 
 mod analyzer;
 mod config;
+mod sql;
 mod wrapper;
 
 use config::{Config, Permission, PermissionResult};
@@ -180,6 +181,13 @@ fn check_single_command(cmd: &analyzer::Command, config: &Config, edit_mode: boo
                 reason: "sed -i modifies files (not in edit mode)".to_string(),
                 suggestion: None,
             };
+        }
+    }
+
+    // Special handling for mysql/mariadb - allow read-only queries
+    if cmd.name == "mysql" || cmd.name == "mariadb" {
+        if let Some(result) = sql::check_sql_query(cmd) {
+            return result;
         }
     }
 
