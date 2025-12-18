@@ -78,26 +78,14 @@ pub struct HostRule {
 }
 
 /// Wrapper command configuration
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WrapperConfig {
     /// The wrapper command name
     pub command: String,
 
-    /// Allow options to the wrapper
-    #[serde(default = "default_true")]
-    pub allow_options: bool,
-
-    /// Allow the wrapper itself (transparent)
-    #[serde(default = "default_true")]
-    pub allow_wrapper: bool,
-
-    /// Whether to extract host from arguments
+    /// Options that take an argument (e.g., ["-u", "-g"] for sudo)
     #[serde(default)]
-    pub extract_host: bool,
-}
-
-fn default_true() -> bool {
-    true
+    pub opts_with_args: Vec<String>,
 }
 
 /// Command suggestion
@@ -136,6 +124,11 @@ impl Config {
         }
 
         Self::default()
+    }
+
+    /// Get wrapper config by command name
+    pub fn get_wrapper(&self, name: &str) -> Option<&WrapperConfig> {
+        self.wrappers.iter().find(|w| w.command == name)
     }
 
     /// Check a command against rules
@@ -451,15 +444,30 @@ impl Default for Config {
             wrappers: vec![
                 WrapperConfig {
                     command: "sudo".into(),
-                    allow_options: true,
-                    allow_wrapper: true,
-                    extract_host: false,
+                    opts_with_args: vec![
+                        "-g".into(), "-p".into(), "-r".into(), "-t".into(),
+                        "-u".into(), "-T".into(), "-C".into(), "-h".into(), "-U".into(),
+                    ],
                 },
                 WrapperConfig {
-                    command: "ssh".into(),
-                    allow_options: true,
-                    allow_wrapper: true,
-                    extract_host: true,
+                    command: "nice".into(),
+                    opts_with_args: vec!["-n".into()],
+                },
+                WrapperConfig {
+                    command: "nohup".into(),
+                    opts_with_args: vec![],
+                },
+                WrapperConfig {
+                    command: "time".into(),
+                    opts_with_args: vec!["-o".into(), "-f".into()],
+                },
+                WrapperConfig {
+                    command: "strace".into(),
+                    opts_with_args: vec!["-e".into(), "-o".into(), "-p".into(), "-s".into(), "-u".into()],
+                },
+                WrapperConfig {
+                    command: "ltrace".into(),
+                    opts_with_args: vec!["-e".into(), "-o".into(), "-p".into(), "-s".into(), "-u".into(), "-n".into()],
                 },
             ],
             suggestions: vec![

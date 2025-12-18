@@ -133,7 +133,7 @@ fn analyze_command(command: &str, config: &Config) -> PermissionResult {
 /// Check a single command, handling wrappers recursively
 fn check_single_command(cmd: &analyzer::Command, config: &Config) -> PermissionResult {
     // Check if this is a wrapper command
-    if let Some(unwrap_result) = wrapper::unwrap_command(cmd) {
+    if let Some(unwrap_result) = wrapper::unwrap_command(cmd, config) {
         // If there's an inner command, recursively analyze it
         if let Some(ref inner) = unwrap_result.inner_command {
             let inner_result = analyze_command(inner, config);

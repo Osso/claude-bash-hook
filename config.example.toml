@@ -88,47 +88,40 @@ host_rules = [
 ]
 
 # Wrapper configurations - these commands are "unwrapped" to analyze the inner command
-# Built-in wrappers: sudo, ssh, scp, rsync, env, kubectl exec, nice, nohup, time, strace, ltrace
+# Simple wrappers are config-driven (skip options, run inner command)
+# Complex wrappers have special handling: ssh, scp, rsync, env, kubectl exec, timeout
+
 [[wrappers]]
 command = "sudo"
-allow_options = true
-allow_wrapper = true
-
-[[wrappers]]
-command = "ssh"
-allow_options = true
-extract_host = true
-
-[[wrappers]]
-command = "scp"
-extract_host = true
-
-[[wrappers]]
-command = "rsync"
-extract_host = true
-
-[[wrappers]]
-command = "env"
-allow_wrapper = true
-
-[[wrappers]]
-command = "kubectl exec"
-allow_options = true
-# Inner command after -- is analyzed (e.g., kubectl exec pod -- rm -rf / is denied)
+opts_with_args = ["-g", "-p", "-r", "-t", "-u", "-T", "-C", "-h", "-U"]
 
 [[wrappers]]
 command = "nice"
-allow_options = true
-allow_wrapper = true
+opts_with_args = ["-n"]
 
 [[wrappers]]
 command = "nohup"
-allow_wrapper = true
+opts_with_args = []
 
 [[wrappers]]
 command = "time"
-allow_options = true
-allow_wrapper = true
+opts_with_args = ["-o", "-f"]
+
+[[wrappers]]
+command = "strace"
+opts_with_args = ["-e", "-o", "-p", "-s", "-u"]
+
+[[wrappers]]
+command = "ltrace"
+opts_with_args = ["-e", "-o", "-p", "-s", "-u", "-n"]
+
+# These have special handling (hardcoded) - listed here for documentation:
+# - ssh: extracts host, inner command after host
+# - scp: extracts host from user@host:path
+# - rsync: extracts host from user@host:path
+# - env: skips VAR=value, inner command after
+# - kubectl exec: inner command after --
+# - timeout: skips duration arg, inner command after
 
 # Command suggestions
 [[suggestions]]
