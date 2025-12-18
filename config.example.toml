@@ -15,13 +15,17 @@ commands = [
     "ps", "top", "htop", "df", "du", "free", "uptime", "date",
     "grep", "find", "wc", "sort", "uniq", "which", "whereis", "file", "tr", "base64",
     "jq", "yq", "xq",
-    "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln",
+    "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln", "rmdir",
     "sed", "awk",  # sed -i requires edit mode
     "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof",
     "sleep", "ping", "dig", "journalctl", "pgrep", "stat", "apt-cache", "tree", "printenv",
     "php -l", "dpkg -l",
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
     "flatpak list", "npm run typecheck", "composer",
+    "rustc --version", "php --version", "node --version", "npm --version",
+    "python --version", "python3 --version", "go version", "java --version",
+    "ruby --version", "perl --version", "docker --version", "kubectl version",
+    "doctl version",
 ]
 permission = "allow"
 reason = "read-only commands"
@@ -30,7 +34,7 @@ reason = "read-only commands"
 [[rules]]
 commands = [
     "git status", "git log", "git diff", "git branch",
-    "git remote", "git show", "git rev-parse", "git describe",
+    "git remote", "git show", "git rev-parse", "git describe", "git merge-base",
 ]
 permission = "allow"
 reason = "git read-only"
@@ -43,7 +47,7 @@ reason = "force switch can discard changes"
 
 # Git switch/restore without force - allow
 [[rules]]
-commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch"]
+commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit"]
 permission = "allow"
 reason = "safe git operations"
 
@@ -63,15 +67,16 @@ commands = ["docker rm", "docker rmi", "docker system prune"]
 permission = "ask"
 reason = "docker destructive"
 
-# Kubectl read-only
+# Kubectl read-only and safe operations
 [[rules]]
 commands = [
     "kubectl get", "kubectl describe", "kubectl logs",
     "kubectl explain", "kubectl api-resources", "kubectl top",
     "kubectl rollout history", "kubectl rollout status",
+    "kubectl cp",
 ]
 permission = "allow"
-reason = "kubectl read-only"
+reason = "kubectl read-only and safe operations"
 
 # UniFi read-only (all current subcommands)
 [[rules]]
@@ -88,16 +93,23 @@ commands = ["sentry issue", "sentry projects", "sentry issues"]
 permission = "allow"
 reason = "sentry read-only"
 
-# glab read-only
+# jira read-only
+[[rules]]
+commands = ["jira issue view", "jira issue list", "jira project list", "jira sprint list", "jira board list"]
+permission = "allow"
+reason = "jira read-only"
+
+# glab read-only and safe operations
 [[rules]]
 commands = [
     "glab mr list", "glab mr view",
     "glab ci status", "glab ci list", "glab ci view", "glab ci trace",
+    "glab ci run", "glab ci retry", "glab ci trigger",
     "glab issue list", "glab issue view",
     "glab repo view",
 ]
 permission = "allow"
-reason = "glab read-only"
+reason = "glab read-only and safe operations"
 
 # warp-cli allowed operations
 [[rules]]
@@ -172,6 +184,19 @@ commands = ["resolvectl status", "resolvectl query", "resolvectl statistics", "r
 permission = "allow"
 reason = "resolvectl read-only"
 
+# kitty-remote/wezterm-remote safe operations (run subcommand is handled as wrapper)
+[[rules]]
+commands = [
+    "kitty-remote ls", "kitty-remote get-text", "kitty-remote send-text", "kitty-remote send-key",
+    "kitty-remote new-tab", "kitty-remote new-window", "kitty-remote focus-tab", "kitty-remote focus-window",
+    "kitty-remote set-title", "kitty-remote scroll",
+    "wezterm-remote ls", "wezterm-remote lsj", "wezterm-remote get-text", "wezterm-remote send-text", "wezterm-remote send-key",
+    "wezterm-remote new-tab", "wezterm-remote new-window", "wezterm-remote split", "wezterm-remote focus-tab",
+    "wezterm-remote focus-pane", "wezterm-remote set-title", "wezterm-remote zoom", "wezterm-remote find-pane",
+]
+permission = "allow"
+reason = "terminal remote control"
+
 # terraform read-only
 [[rules]]
 commands = ["terraform show", "terraform state list", "terraform state show", "terraform output", "terraform plan", "terraform version", "terraform providers", "terraform validate"]
@@ -216,10 +241,10 @@ commands = [
 permission = "allow"
 reason = "doctl read-only"
 
-# Recursive delete - deny
+# Recursive delete - ask
 [[rules]]
 commands = ["rm -rf", "rm -r", "rm --recursive"]
-permission = "deny"
+permission = "ask"
 reason = "recursive delete"
 
 # Single file delete - ask

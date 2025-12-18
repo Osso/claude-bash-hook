@@ -246,7 +246,7 @@ mod tests {
     fn test_dangerous_command() {
         let config = test_config();
         let result = analyze_command("rm -rf /", &config, false);
-        assert_eq!(result.permission, Permission::Deny);
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
@@ -261,24 +261,24 @@ mod tests {
     fn test_sudo_dangerous() {
         let config = test_config();
         let result = analyze_command("sudo rm -rf /", &config, false);
-        // sudo unwraps to rm -rf /, which is denied
-        assert_eq!(result.permission, Permission::Deny);
+        // sudo unwraps to rm -rf /, which asks
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
     fn test_chain_with_dangerous() {
         let config = test_config();
         let result = analyze_command("ls && rm -rf /tmp", &config, false);
-        // Most restrictive should be deny
-        assert_eq!(result.permission, Permission::Deny);
+        // Most restrictive should be ask
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
     fn test_env_dangerous() {
         let config = test_config();
         let result = analyze_command("env VAR=1 rm -rf /", &config, false);
-        // env unwraps to rm -rf /, which is denied
-        assert_eq!(result.permission, Permission::Deny);
+        // env unwraps to rm -rf /, which asks
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
@@ -309,8 +309,8 @@ mod tests {
     fn test_kubectl_exec_dangerous() {
         let config = test_config();
         let result = analyze_command("kubectl exec -n prod mypod -- rm -rf /", &config, false);
-        // kubectl exec unwraps to rm -rf /, which is denied
-        assert_eq!(result.permission, Permission::Deny);
+        // kubectl exec unwraps to rm -rf /, which asks
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
