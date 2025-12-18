@@ -1,0 +1,140 @@
+# Claude Bash Hook Configuration
+# Copy this file to ~/.config/claude-bash-hook/config.toml
+
+# Default permission for commands not matching any rule
+default = "ask"
+
+# Rules are checked in order - first match wins
+# More specific rules should come before general ones
+
+# Read-only commands - always allow
+[[rules]]
+commands = [
+    "ls", "cat", "head", "tail", "less", "more",
+    "pwd", "whoami", "hostname", "uname", "id", "groups",
+    "ps", "top", "htop", "df", "du", "free", "uptime", "date",
+    "grep", "find", "wc", "sort", "uniq", "which", "whereis", "file",
+]
+permission = "allow"
+reason = "read-only commands"
+
+# Git read-only operations
+[[rules]]
+commands = [
+    "git status", "git log", "git diff", "git branch",
+    "git remote", "git show", "git rev-parse", "git describe",
+]
+permission = "allow"
+reason = "git read-only"
+
+# Git switch with force flag - ask
+[[rules]]
+commands = ["git switch -f", "git switch --force"]
+permission = "ask"
+reason = "force switch can discard changes"
+
+# Git switch/restore without force - allow
+[[rules]]
+commands = ["git switch", "git restore"]
+permission = "allow"
+reason = "safe git operations"
+
+# Docker read-only
+[[rules]]
+commands = ["docker ps", "docker logs", "docker inspect", "docker images"]
+permission = "allow"
+reason = "docker read-only"
+
+# Docker destructive - ask
+[[rules]]
+commands = ["docker rm", "docker rmi", "docker system prune"]
+permission = "ask"
+reason = "docker destructive"
+
+# Kubectl read-only
+[[rules]]
+commands = ["kubectl get", "kubectl describe", "kubectl logs"]
+permission = "allow"
+reason = "kubectl read-only"
+
+# Recursive delete - deny
+[[rules]]
+commands = ["rm -rf", "rm -r", "rm --recursive"]
+permission = "deny"
+reason = "recursive delete"
+
+# Single file delete - ask
+[[rules]]
+commands = ["rm"]
+permission = "ask"
+reason = "file deletion"
+
+# Disk operations - deny
+[[rules]]
+commands = ["mkfs", "dd", "fdisk", "parted"]
+permission = "deny"
+reason = "disk operations"
+
+# SSH with host rules
+[[rules]]
+commands = ["ssh", "scp", "rsync"]
+permission = "check_host"
+reason = "remote connection"
+host_rules = [
+    { pattern = "dev-*", permission = "allow" },
+    { pattern = "staging-*", permission = "ask" },
+    { pattern = "prod-*", permission = "ask" },
+    { pattern = "*", permission = "allow" },
+]
+
+# Wrapper configurations - these commands are "unwrapped" to analyze the inner command
+# Built-in wrappers: sudo, ssh, scp, rsync, env, kubectl exec, nice, nohup, time, strace, ltrace
+[[wrappers]]
+command = "sudo"
+allow_options = true
+allow_wrapper = true
+
+[[wrappers]]
+command = "ssh"
+allow_options = true
+extract_host = true
+
+[[wrappers]]
+command = "scp"
+extract_host = true
+
+[[wrappers]]
+command = "rsync"
+extract_host = true
+
+[[wrappers]]
+command = "env"
+allow_wrapper = true
+
+[[wrappers]]
+command = "kubectl exec"
+allow_options = true
+# Inner command after -- is analyzed (e.g., kubectl exec pod -- rm -rf / is denied)
+
+[[wrappers]]
+command = "nice"
+allow_options = true
+allow_wrapper = true
+
+[[wrappers]]
+command = "nohup"
+allow_wrapper = true
+
+[[wrappers]]
+command = "time"
+allow_options = true
+allow_wrapper = true
+
+# Command suggestions
+[[suggestions]]
+command = "git checkout"
+message = "Consider using 'git switch <branch>' or 'git restore <file>' instead"
+
+[[suggestions]]
+command = "docker-compose"
+message = "Use 'docker compose' (v2) instead of 'docker-compose'"
