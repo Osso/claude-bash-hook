@@ -2,7 +2,8 @@
 # Copy this file to ~/.config/claude-bash-hook/config.toml
 
 # Default permission for commands not matching any rule
-default = "ask"
+# "passthrough" lets Claude Code's built-in permission system handle it
+default = "passthrough"
 
 # Rules are checked in order - first match wins
 # More specific rules should come before general ones
