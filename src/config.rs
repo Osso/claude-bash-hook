@@ -260,6 +260,10 @@ impl Config {
         }
 
         // Check remaining parts against args
+        // Collect all non-flag args (subcommands)
+        let subcommands = self.find_subcommands(name, args);
+        let mut subcommand_idx = 0;
+
         for part in &parts[1..] {
             if part.starts_with('-') {
                 // This is a flag - check if it's in args
@@ -267,15 +271,54 @@ impl Config {
                     return false;
                 }
             } else {
-                // This is a subcommand - find first non-flag arg, skipping flag arguments
-                let subcommand = self.find_subcommand(name, args);
-                if subcommand.as_deref() != Some(*part) {
+                // This is a subcommand - check against next subcommand in sequence
+                if subcommand_idx >= subcommands.len() || subcommands[subcommand_idx] != *part {
                     return false;
                 }
+                subcommand_idx += 1;
             }
         }
 
         true
+    }
+
+    /// Find all subcommands (positional args), skipping flags and their arguments
+    fn find_subcommands(&self, cmd_name: &str, args: &[String]) -> Vec<String> {
+        // Flags that take an argument for common commands
+        let flags_with_args: &[&str] = match cmd_name {
+            "git" => &["-C", "-c", "--git-dir", "--work-tree", "--namespace"],
+            "docker" => &["-H", "--host", "--config", "--context", "-c", "-l", "--log-level"],
+            "kubectl" => &["-n", "--namespace", "--context", "--cluster", "-s", "--server"],
+            "quickshell" => &[],
+            _ => &[],
+        };
+
+        let mut subcommands = Vec::new();
+        let mut skip_next = false;
+
+        for arg in args {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+
+            if arg.starts_with('-') {
+                let flag = if arg.contains('=') {
+                    continue;
+                } else {
+                    arg.as_str()
+                };
+
+                if flags_with_args.contains(&flag) {
+                    skip_next = true;
+                }
+                continue;
+            }
+
+            subcommands.push(arg.clone());
+        }
+
+        subcommands
     }
 
     /// Find the subcommand (first positional arg), skipping flags and their arguments
