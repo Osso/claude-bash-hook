@@ -218,7 +218,7 @@ reason = "pacman read-only"
 
 # yay read-only (query and search)
 [[rules]]
-commands = ["yay -Q", "yay -Qi", "yay -Ql", "yay -Qo", "yay -Qs", "yay -Ss", "yay -Si", "yay -Sg", "yay -Ps"]
+commands = ["yay -Q", "yay -Qi", "yay -Ql", "yay -Qo", "yay -Qs", "yay -Ss", "yay -Si", "yay -Sg", "yay -Ps", "yay -Sw", "yay -G"]
 permission = "allow"
 reason = "yay read-only"
 
