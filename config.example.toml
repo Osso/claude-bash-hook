@@ -205,6 +205,12 @@ commands = ["terraform show", "terraform state list", "terraform state show", "t
 permission = "allow"
 reason = "terraform read-only"
 
+# gmail read-only
+[[rules]]
+commands = ["gmail list"]
+permission = "allow"
+reason = "gmail read-only"
+
 # slack read-only
 [[rules]]
 commands = ["slack channels", "slack channel", "slack messages", "slack dms", "slack users", "slack search", "slack config"]
