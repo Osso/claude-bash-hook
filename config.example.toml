@@ -211,6 +211,12 @@ commands = ["gmail list", "gmail labels"]
 permission = "allow"
 reason = "gmail read-only"
 
+# gitlab read-only
+[[rules]]
+commands = ["gitlab mr list", "gitlab mr show", "gitlab ci status", "gitlab ci logs", "gitlab --help"]
+permission = "allow"
+reason = "gitlab read-only"
+
 # slack read-only
 [[rules]]
 commands = ["slack channels", "slack channel", "slack messages", "slack dms", "slack users", "slack search", "slack config"]
