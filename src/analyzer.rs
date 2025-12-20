@@ -75,7 +75,7 @@ fn walk_node(node: Node, source: &[u8], commands: &mut Vec<Command>) {
         // Recurse into container nodes
         "program" | "list" | "pipeline" | "compound_statement" | "subshell"
         | "if_statement" | "while_statement" | "for_statement" | "case_statement"
-        | "redirected_statement" | "negated_command" => {
+        | "redirected_statement" | "negated_command" | "do_group" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 walk_node(child, source, commands);
@@ -187,5 +187,14 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.commands.len(), 1);
         assert_eq!(result.commands[0].name, "ls");
+    }
+
+    #[test]
+    fn test_while_loop() {
+        let result = analyze("while read id; do echo $id; done");
+        assert!(result.success);
+        assert_eq!(result.commands.len(), 2);
+        assert_eq!(result.commands[0].name, "read");
+        assert_eq!(result.commands[1].name, "echo");
     }
 }
