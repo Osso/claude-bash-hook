@@ -7,6 +7,7 @@ mod env;
 mod kubectl;
 mod rsync;
 mod scp;
+mod shell;
 mod ssh;
 mod terminal_remote;
 mod timeout;
@@ -39,6 +40,7 @@ pub fn unwrap_command(cmd: &Command, config: &Config) -> Option<UnwrapResult> {
         "timeout" => return timeout::unwrap(cmd),
         "kitty-remote" | "wezterm-remote" => return terminal_remote::unwrap(cmd),
         "xargs" => return xargs::unwrap(cmd),
+        "sh" | "bash" | "zsh" => return shell::unwrap(cmd),
         _ => {}
     }
 
