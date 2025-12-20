@@ -24,7 +24,7 @@ commands = [
     "php -l", "dpkg -l",
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
     "flatpak list", "npm run typecheck", "composer",
-    "rustc --version", "php --version", "node --version", "npm --version", "mago --version", "mago lint", "mago --help",
+    "rustc --version", "php --version", "node --version", "npm --version", "mago --version", "mago lint", "mago config", "mago --help",
     "python --version", "python3 --version", "go version", "java --version",
     "ruby --version", "perl --version", "docker --version", "kubectl version",
     "doctl version",
