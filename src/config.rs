@@ -322,45 +322,6 @@ impl Config {
         subcommands
     }
 
-    /// Find the subcommand (first positional arg), skipping flags and their arguments
-    fn find_subcommand(&self, cmd_name: &str, args: &[String]) -> Option<String> {
-        // Flags that take an argument for common commands
-        let flags_with_args: &[&str] = match cmd_name {
-            "git" => &["-C", "-c", "--git-dir", "--work-tree", "-C", "--namespace"],
-            "docker" => &["-H", "--host", "--config", "--context", "-c", "-l", "--log-level"],
-            "kubectl" => &["-n", "--namespace", "--context", "--cluster", "-s", "--server"],
-            _ => &[],
-        };
-
-        let mut skip_next = false;
-        for arg in args {
-            if skip_next {
-                skip_next = false;
-                continue;
-            }
-
-            if arg.starts_with('-') {
-                // Check if this flag takes an argument
-                let flag = if arg.contains('=') {
-                    // --flag=value format, no need to skip next
-                    continue;
-                } else {
-                    arg.as_str()
-                };
-
-                if flags_with_args.contains(&flag) {
-                    skip_next = true;
-                }
-                continue;
-            }
-
-            // Found a positional argument - this is the subcommand
-            return Some(arg.clone());
-        }
-
-        None
-    }
-
     /// Check if a flag is present in args
     /// Handles combined flags like -rf matching -r and -f
     fn has_flag(&self, args: &[String], flag: &str) -> bool {
