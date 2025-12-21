@@ -3,6 +3,16 @@
 use crate::analyzer::Command;
 use crate::wrappers::UnwrapResult;
 
+/// Strip surrounding single or double quotes from a string
+fn strip_quotes(s: &str) -> String {
+    let s = s.trim();
+    if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"')) {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 /// Unwrap ssh command
 /// ssh [options] [user@]hostname [command]
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
@@ -46,12 +56,17 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
         inner_parts.push(arg.clone());
     }
 
+    let inner_command = if inner_parts.is_empty() {
+        None
+    } else if inner_parts.len() == 1 {
+        // Single argument - might be a quoted command string
+        Some(strip_quotes(&inner_parts[0]))
+    } else {
+        Some(inner_parts.join(" "))
+    };
+
     Some(UnwrapResult {
-        inner_command: if inner_parts.is_empty() {
-            None
-        } else {
-            Some(inner_parts.join(" "))
-        },
+        inner_command,
         host,
         wrapper: "ssh".to_string(),
     })
@@ -91,5 +106,13 @@ mod tests {
         let result = unwrap(&cmd).unwrap();
         assert_eq!(result.host, Some("myhost".to_string()));
         assert_eq!(result.inner_command, None);
+    }
+
+    #[test]
+    fn test_ssh_quoted_command() {
+        let cmd = make_cmd(&["host", "\"systemctl status foo\""]);
+        let result = unwrap(&cmd).unwrap();
+        assert_eq!(result.host, Some("host".to_string()));
+        assert_eq!(result.inner_command, Some("systemctl status foo".to_string()));
     }
 }
