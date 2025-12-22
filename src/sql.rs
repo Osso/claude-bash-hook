@@ -17,6 +17,9 @@ fn check_query_readonly(query: &str) -> PermissionResult {
     // Read-only SQL statements
     let read_only_prefixes = [
         "SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "USE", "PRAGMA",
+        // SQLite3 dot commands (read-only)
+        ".SCHEMA", ".TABLES", ".INDICES", ".INDEXES", ".DUMP", ".MODE",
+        ".HEADERS", ".SEPARATOR", ".WIDTH", ".PRINT", ".SHOW", ".DATABASES",
     ];
 
     // Split by semicolons and check ALL statements
@@ -230,5 +233,19 @@ mod tests {
         let cmd = make_cmd("sqlite3", &["db.sqlite"]);
         let result = check_sqlite3_query(&cmd);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_sqlite3_schema_allowed() {
+        let cmd = make_cmd("sqlite3", &["db.sqlite", ".schema users"]);
+        let result = check_sqlite3_query(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_sqlite3_tables_allowed() {
+        let cmd = make_cmd("sqlite3", &["db.sqlite", ".tables"]);
+        let result = check_sqlite3_query(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 }
