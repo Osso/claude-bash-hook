@@ -225,7 +225,7 @@ reason = "slack read-only"
 
 # cargo dev commands
 [[rules]]
-commands = ["cargo check", "cargo build", "cargo test", "cargo run", "cargo doc", "cargo search", "cargo tree", "cargo metadata", "cargo fmt", "cargo clippy", "cargo new"]
+commands = ["cargo check", "cargo build", "cargo test", "cargo run", "cargo doc", "cargo search", "cargo tree", "cargo metadata", "cargo fmt", "cargo clippy", "cargo new", "cargo --version"]
 permission = "allow"
 reason = "cargo dev commands"
 
