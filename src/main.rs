@@ -193,7 +193,14 @@ fn check_single_command(cmd: &analyzer::Command, config: &Config, edit_mode: boo
 
     // Special handling for mysql/mariadb - allow read-only queries
     if cmd.name == "mysql" || cmd.name == "mariadb" {
-        if let Some(result) = sql::check_sql_query(cmd) {
+        if let Some(result) = sql::check_mysql_query(cmd) {
+            return result;
+        }
+    }
+
+    // Special handling for sqlite3 - allow read-only queries
+    if cmd.name == "sqlite3" {
+        if let Some(result) = sql::check_sqlite3_query(cmd) {
             return result;
         }
     }
