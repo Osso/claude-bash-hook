@@ -25,10 +25,7 @@ commands = [
     "php -l", "dpkg -l",
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
     "flatpak list", "npm run typecheck", "composer",
-    "rustc --version", "php --version", "node --version", "npm --version", "mago --version", "mago lint", "mago config", "mago --help",
-    "python --version", "python3 --version", "go version", "java --version",
-    "ruby --version", "perl --version", "docker --version", "kubectl version",
-    "doctl version",
+    "mago lint", "mago config",
 ]
 permission = "allow"
 reason = "read-only commands"
@@ -98,7 +95,7 @@ reason = "sentry read-only"
 
 # jira read-only
 [[rules]]
-commands = ["jira issue view", "jira issue list", "jira project list", "jira sprint list", "jira board list", "jira issue create --help"]
+commands = ["jira issue view", "jira issue list", "jira project list", "jira sprint list", "jira board list"]
 permission = "allow"
 reason = "jira read-only"
 
@@ -214,7 +211,7 @@ reason = "gmail read-only"
 
 # gitlab read-only
 [[rules]]
-commands = ["gitlab mr list", "gitlab mr show", "gitlab ci status", "gitlab ci logs", "gitlab --help"]
+commands = ["gitlab mr list", "gitlab mr show", "gitlab ci status", "gitlab ci logs"]
 permission = "allow"
 reason = "gitlab read-only"
 
@@ -226,7 +223,7 @@ reason = "slack read-only"
 
 # cargo dev commands
 [[rules]]
-commands = ["cargo check", "cargo build", "cargo test", "cargo run", "cargo doc", "cargo search", "cargo tree", "cargo metadata", "cargo fmt", "cargo clippy", "cargo new", "cargo --version", "cargo outdated"]
+commands = ["cargo check", "cargo build", "cargo test", "cargo run", "cargo doc", "cargo search", "cargo tree", "cargo metadata", "cargo fmt", "cargo clippy", "cargo new", "cargo outdated"]
 permission = "allow"
 reason = "cargo dev commands"
 
@@ -255,8 +252,7 @@ commands = [
     "doctl compute droplet list", "doctl compute droplet get",
     "doctl compute image list", "doctl compute region list", "doctl compute size list",
     "doctl compute ssh-key list", "doctl compute volume list",
-    "doctl kubernetes cluster list", "doctl kubernetes cluster get", "doctl kubernetes cluster --help",
-    "doctl kubernetes --help",
+    "doctl kubernetes cluster list", "doctl kubernetes cluster get",
     "doctl databases list", "doctl databases get",
     "doctl vpcs list", "doctl vpcs get",
 ]

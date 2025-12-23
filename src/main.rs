@@ -219,6 +219,22 @@ fn check_single_command(cmd: &analyzer::Command, config: &Config, edit_mode: boo
         }
     }
 
+    // Special handling for --help and --version - always allow
+    if cmd.args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
+        return PermissionResult {
+            permission: Permission::Allow,
+            reason: "help request".to_string(),
+            suggestion: None,
+        };
+    }
+    if cmd.args.iter().any(|a| a == "--version" || a == "-V" || a == "version") {
+        return PermissionResult {
+            permission: Permission::Allow,
+            reason: "version check".to_string(),
+            suggestion: None,
+        };
+    }
+
     // Regular command - check against rules
     config.check_command(&cmd.name, &cmd.args)
 }
@@ -370,6 +386,34 @@ mod tests {
         let config = test_config();
         let result = analyze_command("sed -i 's/foo/bar/' file.txt", &config, true);
         // sed -i allowed when in edit mode
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_help_always_allowed() {
+        let config = test_config();
+        // --help flag
+        let result = analyze_command("someunknown --help", &config, false);
+        assert_eq!(result.permission, Permission::Allow);
+        // -h flag
+        let result = analyze_command("kubectl delete -h", &config, false);
+        assert_eq!(result.permission, Permission::Allow);
+        // help subcommand
+        let result = analyze_command("cargo help build", &config, false);
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_version_always_allowed() {
+        let config = test_config();
+        // --version flag
+        let result = analyze_command("someunknown --version", &config, false);
+        assert_eq!(result.permission, Permission::Allow);
+        // -V flag
+        let result = analyze_command("rustc -V", &config, false);
+        assert_eq!(result.permission, Permission::Allow);
+        // version subcommand
+        let result = analyze_command("docker version", &config, false);
         assert_eq!(result.permission, Permission::Allow);
     }
 }
