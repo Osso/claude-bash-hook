@@ -57,7 +57,7 @@ reason = "safe git operations"
 [[rules]]
 commands = [
     "docker ps", "docker logs", "docker inspect", "docker images",
-    "docker pull", "docker build", "docker tag",
+    "docker pull", "docker build", "docker tag", "docker search",
     "docker compose ps", "docker compose logs",
 ]
 permission = "allow"
