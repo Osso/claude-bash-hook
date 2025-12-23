@@ -50,7 +50,7 @@ reason = "force switch can discard changes"
 
 # Git safe operations (git push handled specially in code)
 [[rules]]
-commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit", "git init"]
+commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit", "git init", "git clone"]
 permission = "allow"
 reason = "safe git operations"
 
