@@ -14,7 +14,7 @@ commands = [
     "ls", "cat", "head", "tail", "less", "more",
     "pwd", "whoami", "hostname", "uname", "id", "groups",
     "ps", "top", "htop", "df", "du", "free", "uptime", "date",
-    "grep", "find", "locate", "wc", "diff", "sort", "uniq", "which", "whereis", "file", "tr", "base64", "xxd", "od", "zcat", "gzip", "gunzip", "comm", "command -v",
+    "grep", "find", "locate", "wc", "diff", "sort", "uniq", "which", "whereis", "file", "tr", "cut", "basename", "dirname", "base64", "xxd", "od", "zcat", "gzip", "gunzip", "comm", "command -v",
     "jq", "yq", "xq",
     "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false",
     "sed", "awk",  # sed -i requires edit mode
