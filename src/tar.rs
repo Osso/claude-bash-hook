@@ -46,24 +46,81 @@ pub fn check_tar(cmd: &Command) -> Option<PermissionResult> {
     // Find the -C/--directory target
     let target_dir = find_target_dir(&cmd.args);
 
-    match target_dir {
-        Some(dir) => {
-            if is_safe_tmp_claude_path(dir) {
-                Some(PermissionResult {
-                    permission: Permission::Allow,
-                    reason: "tar extract to /tmp/claude".to_string(),
-                    suggestion: None,
-                })
-            } else {
-                // Not a safe path - passthrough
-                None
-            }
+    if let Some(dir) = target_dir {
+        if is_safe_tmp_claude_path(dir) {
+            return Some(PermissionResult {
+                permission: Permission::Allow,
+                reason: "tar extract to /tmp/claude".to_string(),
+                suggestion: None,
+            });
         }
-        None => {
-            // No -C specified, extracts to current dir - passthrough
-            None
+        // Explicit -C to non-safe path - passthrough
+        return None;
+    }
+
+    // No -C specified - check if source file is from /tmp/claude/
+    // This allows extracting temp files we're working with
+    if let Some(source) = find_source_file(&cmd.args) {
+        if is_safe_tmp_claude_path(source) {
+            return Some(PermissionResult {
+                permission: Permission::Allow,
+                reason: "tar extract from /tmp/claude".to_string(),
+                suggestion: None,
+            });
         }
     }
+
+    // Passthrough
+    None
+}
+
+/// Find the source file (the tarball being extracted)
+fn find_source_file(args: &[String]) -> Option<&str> {
+    let mut i = 0;
+    let mut skip_next = false;
+
+    while i < args.len() {
+        if skip_next {
+            skip_next = false;
+            i += 1;
+            continue;
+        }
+
+        let arg = &args[i];
+
+        // Skip flags that take arguments
+        if arg == "-C" || arg == "--directory" || arg == "-f" || arg == "--file" {
+            // -f is followed by the file, but we want to capture it
+            if arg == "-f" || arg == "--file" {
+                if let Some(file) = args.get(i + 1) {
+                    return Some(file);
+                }
+            }
+            skip_next = true;
+            i += 1;
+            continue;
+        }
+
+        // Handle -f=file or --file=file
+        if let Some(file) = arg.strip_prefix("-f=").or_else(|| arg.strip_prefix("--file=")) {
+            return Some(file);
+        }
+
+        // Handle combined flags like -xf file.tar
+        if arg.starts_with('-') && !arg.starts_with("--") && arg.contains('f') {
+            // The file should be the next argument
+            if let Some(file) = args.get(i + 1) {
+                // Make sure it's not another flag
+                if !file.starts_with('-') {
+                    return Some(file);
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    None
 }
 
 /// Find the target directory from -C or --directory flag
@@ -184,6 +241,20 @@ mod tests {
         let cmd = make_cmd(&["-xf", "file.tar"]);
         let result = check_tar(&cmd);
         assert!(result.is_none()); // passthrough, extracts to cwd
+    }
+
+    #[test]
+    fn test_tar_extract_from_tmp_claude() {
+        let cmd = make_cmd(&["-xf", "/tmp/claude/blobs/layer.tar"]);
+        let result = check_tar(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_tar_extract_from_tmp_claude_with_flags() {
+        let cmd = make_cmd(&["-xzf", "/tmp/claude/archive.tar.gz"]);
+        let result = check_tar(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
