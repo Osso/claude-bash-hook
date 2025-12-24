@@ -158,7 +158,7 @@ fn analyze_command(command: &str, config: &Config, edit_mode: bool) -> Permissio
             }
         }
 
-        let result = check_single_command(cmd, config, edit_mode, virtual_cwd.as_deref());
+        let result = check_single_command(cmd, config, edit_mode, virtual_cwd.as_deref(), has_uncertain_flow);
 
         if result.permission > most_restrictive.permission {
             most_restrictive = result;
@@ -174,6 +174,7 @@ fn check_single_command(
     config: &Config,
     edit_mode: bool,
     virtual_cwd: Option<&str>,
+    has_uncertain_flow: bool,
 ) -> PermissionResult {
     // Check if this is a wrapper command
     if let Some(unwrap_result) = wrappers::unwrap_command(cmd, config) {
@@ -261,7 +262,7 @@ fn check_single_command(
 
     // Special handling for tar - allow extraction to /tmp/claude/
     if cmd.name == "tar" {
-        if let Some(result) = tar::check_tar(cmd, virtual_cwd) {
+        if let Some(result) = tar::check_tar(cmd, virtual_cwd, has_uncertain_flow) {
             return result;
         }
     }

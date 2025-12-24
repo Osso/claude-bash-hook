@@ -12,7 +12,7 @@ const SAFE_PREFIX: &str = "/tmp/claude/";
 /// Allows:
 /// - List mode (tar -t) - read-only
 /// - Extraction to /tmp/claude/ subdirectories
-pub fn check_tar(cmd: &Command, virtual_cwd: Option<&str>) -> Option<PermissionResult> {
+pub fn check_tar(cmd: &Command, virtual_cwd: Option<&str>, has_uncertain_flow: bool) -> Option<PermissionResult> {
     if cmd.name != "tar" {
         return None;
     }
@@ -59,7 +59,8 @@ pub fn check_tar(cmd: &Command, virtual_cwd: Option<&str>) -> Option<PermissionR
     }
 
     // No -C specified - allow if current directory (or virtual cwd) is under /tmp/claude/
-    if is_cwd_safe(virtual_cwd) {
+    // But NOT if there's uncertain control flow (cd might have changed in conditional)
+    if !has_uncertain_flow && is_cwd_safe(virtual_cwd) {
         return Some(PermissionResult {
             permission: Permission::Allow,
             reason: "tar extract (cwd in /tmp/claude)".to_string(),
@@ -186,35 +187,35 @@ mod tests {
     #[test]
     fn test_tar_extract_to_tmp_claude() {
         let cmd = make_cmd(&["-xf", "-", "-C", "/tmp/claude/test"]);
-        let result = check_tar(&cmd, None).unwrap();
+        let result = check_tar(&cmd, None, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tar_extract_to_tmp_claude_subdir() {
         let cmd = make_cmd(&["-xzf", "file.tar.gz", "-C", "/tmp/claude/deep/path"]);
-        let result = check_tar(&cmd, None).unwrap();
+        let result = check_tar(&cmd, None, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tar_extract_to_home_not_allowed() {
         let cmd = make_cmd(&["-xf", "file.tar", "-C", "/home/user"]);
-        let result = check_tar(&cmd, None);
+        let result = check_tar(&cmd, None, false);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_tar_extract_to_tmp_not_allowed() {
         let cmd = make_cmd(&["-xf", "file.tar", "-C", "/tmp"]);
-        let result = check_tar(&cmd, None);
+        let result = check_tar(&cmd, None, false);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_tar_extract_no_directory() {
         let cmd = make_cmd(&["-xf", "file.tar"]);
-        let result = check_tar(&cmd, None);
+        let result = check_tar(&cmd, None, false);
         assert!(result.is_none()); // passthrough, extracts to cwd (not /tmp/claude)
     }
 
@@ -222,7 +223,7 @@ mod tests {
     fn test_tar_extract_with_virtual_cwd() {
         // Simulates: cd /tmp/claude/dir && tar -xf file.tar
         let cmd = make_cmd(&["-xf", "file.tar"]);
-        let result = check_tar(&cmd, Some("/tmp/claude/mydir")).unwrap();
+        let result = check_tar(&cmd, Some("/tmp/claude/mydir"), false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -230,28 +231,45 @@ mod tests {
     fn test_tar_extract_with_virtual_cwd_unsafe() {
         // Simulates: cd /home/user && tar -xf file.tar
         let cmd = make_cmd(&["-xf", "file.tar"]);
-        let result = check_tar(&cmd, Some("/home/user"));
+        let result = check_tar(&cmd, Some("/home/user"), false);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_tar_extract_with_uncertain_flow() {
+        // Simulates: if true; then cd /; fi && tar -xf file.tar
+        // Even with virtual_cwd in /tmp/claude, uncertain flow should passthrough
+        let cmd = make_cmd(&["-xf", "file.tar"]);
+        let result = check_tar(&cmd, Some("/tmp/claude/mydir"), true);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_tar_extract_explicit_c_with_uncertain_flow() {
+        // Explicit -C /tmp/claude is still allowed even with uncertain flow
+        let cmd = make_cmd(&["-xf", "file.tar", "-C", "/tmp/claude/dir"]);
+        let result = check_tar(&cmd, None, true).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tar_create_not_handled() {
         let cmd = make_cmd(&["-cf", "file.tar", "/tmp/claude/test"]);
-        let result = check_tar(&cmd, None);
+        let result = check_tar(&cmd, None, false);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_tar_list_allowed() {
         let cmd = make_cmd(&["-tf", "file.tar"]);
-        let result = check_tar(&cmd, None).unwrap();
+        let result = check_tar(&cmd, None, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tar_list_verbose_allowed() {
         let cmd = make_cmd(&["-tvf", "file.tar"]);
-        let result = check_tar(&cmd, None).unwrap();
+        let result = check_tar(&cmd, None, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 }
