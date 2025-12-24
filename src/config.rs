@@ -4,6 +4,9 @@ use glob_match::glob_match;
 use serde::Deserialize;
 use std::path::Path;
 
+/// Embedded default configuration
+const DEFAULT_CONFIG: &str = include_str!("../config.default.toml");
+
 /// Permission levels (ordered by restrictiveness)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Permission {
@@ -390,13 +393,8 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // Minimal default - ask for everything if no config file
-        Config {
-            default: "ask".to_string(),
-            rules: vec![],
-            wrappers: vec![],
-            suggestions: vec![],
-        }
+        // Use embedded default config
+        toml::from_str(DEFAULT_CONFIG).expect("Embedded default config is invalid")
     }
 }
 
@@ -406,7 +404,7 @@ mod tests {
     use std::path::Path;
 
     fn test_config() -> Config {
-        Config::load(Path::new("config.example.toml")).expect("Failed to load test config")
+        Config::load(Path::new("config.default.toml")).expect("Failed to load test config")
     }
 
     #[test]
@@ -476,9 +474,16 @@ mod tests {
     }
 
     #[test]
-    fn test_default_config_asks() {
+    fn test_default_config_allows_ls() {
         let config = Config::default();
         let result = config.check_command("ls", &[]);
-        assert_eq!(result.permission, Permission::Ask);
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_default_config_passthrough_unknown() {
+        let config = Config::default();
+        let result = config.check_command("unknown_dangerous_cmd", &[]);
+        assert_eq!(result.permission, Permission::Passthrough);
     }
 }

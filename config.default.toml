@@ -1,5 +1,6 @@
-# Claude Bash Hook Configuration
-# Copy this file to ~/.config/claude-bash-hook/config.toml
+# Claude Bash Hook Default Configuration
+# This config is embedded in the binary and used when no user config exists.
+# To customize, copy to ~/.config/claude-bash-hook/config.toml
 
 # Default permission for commands not matching any rule
 # "passthrough" lets Claude Code's built-in permission system handle it

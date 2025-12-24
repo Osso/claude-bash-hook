@@ -317,7 +317,7 @@ mod tests {
     use std::path::Path;
 
     fn test_config() -> Config {
-        Config::load(Path::new("config.example.toml")).expect("Failed to load test config")
+        Config::load(Path::new("config.default.toml")).expect("Failed to load test config")
     }
 
     #[test]
