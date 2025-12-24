@@ -8,6 +8,7 @@ mod docker;
 mod git;
 mod rm;
 mod sql;
+mod tar;
 mod wrappers;
 
 use config::{Config, Permission, PermissionResult};
@@ -231,6 +232,13 @@ fn check_single_command(cmd: &analyzer::Command, config: &Config, edit_mode: boo
     // Special handling for rm - allow deletion under /tmp/
     if cmd.name == "rm" {
         if let Some(result) = rm::check_rm(cmd) {
+            return result;
+        }
+    }
+
+    // Special handling for tar - allow extraction to /tmp/claude/
+    if cmd.name == "tar" {
+        if let Some(result) = tar::check_tar(cmd) {
             return result;
         }
     }
