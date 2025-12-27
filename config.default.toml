@@ -25,7 +25,7 @@ commands = [
     "quickshell ipc query",
     "php -l", "dpkg -l", "dpkg -S",
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
-    "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm run typecheck", "wezterm show-keys", "wezterm ls-fonts", "composer", "composer install",
+    "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm run typecheck", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install",
     "mago lint", "mago config",
 ]
 permission = "allow"
