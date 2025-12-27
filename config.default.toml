@@ -27,6 +27,7 @@ commands = [
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
     "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm run typecheck", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install",
     "mago lint", "mago config",
+    "shellharden", "shfmt",
 ]
 permission = "allow"
 reason = "read-only commands"
