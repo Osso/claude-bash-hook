@@ -320,6 +320,10 @@ opts_with_args = ["-e", "-o", "-p", "-s", "-u"]
 command = "ltrace"
 opts_with_args = ["-e", "-o", "-p", "-s", "-u", "-n"]
 
+[[wrappers]]
+command = "nu"
+opts_with_args = ["-c", "--commands"]
+
 # These have special handling (hardcoded) - listed here for documentation:
 # - ssh: extracts host, inner command after host
 # - scp: extracts host from user@host:path
