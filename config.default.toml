@@ -19,7 +19,7 @@ commands = [
     "jq", "yq", "xq",
     "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false",
     "sed", "awk",  # sed -i requires edit mode
-    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof", "rocm-smi", "iostat", "pdfinfo",
+    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof", "rocm-smi", "iostat", "pdfinfo", "infocmp",
     "sleep", "ping", "dig", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "ss", "netstat", "wget", "mysqlbinlog",
     "curl -s https://ifconfig.me",
     "quickshell ipc query",
