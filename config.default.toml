@@ -187,6 +187,12 @@ commands = ["resolvectl status", "resolvectl query", "resolvectl statistics", "r
 permission = "allow"
 reason = "resolvectl read-only"
 
+# powerprofilesctl - power profile management
+[[rules]]
+commands = ["powerprofilesctl", "powerprofilesctl get", "powerprofilesctl list", "powerprofilesctl set"]
+permission = "allow"
+reason = "power profile management"
+
 # kitty-remote/wezterm-remote safe operations (run subcommand is handled as wrapper)
 [[rules]]
 commands = [
