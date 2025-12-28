@@ -156,7 +156,7 @@ reason = "ip read-only"
 # systemctl read-only
 [[rules]]
 commands = [
-    "systemctl status", "systemctl list-units", "systemctl list-unit-files",
+    "systemctl status", "systemctl list-units", "systemctl list-unit-files", "systemctl list-jobs", "systemctl get-default",
     "systemctl is-active", "systemctl is-enabled", "systemctl is-failed",
     "systemctl show", "systemctl cat",
 ]
