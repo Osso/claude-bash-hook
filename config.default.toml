@@ -19,7 +19,7 @@ commands = [
     "jq", "yq", "xq",
     "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false",
     "sed", "awk",  # sed -i requires edit mode
-    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "infocmp", "btrfs subvolume list", "gemini --version", "rfkill list", "blkid", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo",
+    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "infocmp", "btrfs subvolume list", "gemini --version", "rfkill list", "blkid", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list",
     "sleep", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves",
     "curl -s https://ifconfig.me",
     "quickshell ipc query",
@@ -186,12 +186,6 @@ reason = "nmcli read-only"
 commands = ["resolvectl status", "resolvectl query", "resolvectl statistics", "resolvectl dns", "resolvectl domain"]
 permission = "allow"
 reason = "resolvectl read-only"
-
-# powerprofilesctl - power profile management
-[[rules]]
-commands = ["powerprofilesctl", "powerprofilesctl get", "powerprofilesctl list", "powerprofilesctl set"]
-permission = "allow"
-reason = "power profile management"
 
 # kitty-remote/wezterm-remote safe operations (run subcommand is handled as wrapper)
 [[rules]]
