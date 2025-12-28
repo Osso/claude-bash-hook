@@ -105,7 +105,7 @@ reason = "jira read-only"
 [[rules]]
 commands = [
     "glab mr list", "glab mr view",
-    "gh repo list",
+    "gh repo list", "gh issue list",
     "glab ci status", "glab ci list", "glab ci view", "glab ci trace",
     "glab ci run", "glab ci retry", "glab ci trigger",
     "glab issue list", "glab issue view",
