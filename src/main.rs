@@ -121,9 +121,9 @@ fn analyze_command(command: &str, config: &Config, edit_mode: bool) -> Permissio
 
     if !analysis.success {
         return PermissionResult {
-            permission: Permission::Ask,
-            reason: analysis.error.unwrap_or_default(),
-            suggestion: None,
+            permission: Permission::Deny,
+            reason: format!("Bash syntax error: {}", analysis.error.unwrap_or_default()),
+            suggestion: Some("Fix the syntax error and try again".to_string()),
         };
     }
 

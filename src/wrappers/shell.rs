@@ -1,12 +1,12 @@
-//! Shell wrapper handling (sh -c, bash -c, zsh -c)
+//! Shell wrapper handling (sh -c, bash -c, zsh -c, nu -c)
 
 use crate::analyzer::Command;
 use crate::wrappers::UnwrapResult;
 
 /// Check if this is a shell -c command and unwrap it
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
-    // Only handle sh, bash, zsh with -c flag
-    if !matches!(cmd.name.as_str(), "sh" | "bash" | "zsh") {
+    // Only handle sh, bash, zsh, nu with -c flag
+    if !matches!(cmd.name.as_str(), "sh" | "bash" | "zsh" | "nu") {
         return None;
     }
 
@@ -15,8 +15,8 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
         return None;
     }
 
-    // Check for -c flag
-    let c_pos = cmd.args.iter().position(|a| a == "-c")?;
+    // Check for -c flag (nu also uses --commands)
+    let c_pos = cmd.args.iter().position(|a| a == "-c" || a == "--commands")?;
 
     // The command string follows -c
     if c_pos + 1 >= cmd.args.len() {
@@ -90,5 +90,19 @@ mod tests {
         let cmd = make_cmd("sh", &["-c"]);
         let result = unwrap(&cmd);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_nu_c_simple() {
+        let cmd = make_cmd("nu", &["-c", "ls"]);
+        let result = unwrap(&cmd).unwrap();
+        assert_eq!(result.inner_command, Some("ls".to_string()));
+    }
+
+    #[test]
+    fn test_nu_commands_long_form() {
+        let cmd = make_cmd("nu", &["--commands", "echo hello"]);
+        let result = unwrap(&cmd).unwrap();
+        assert_eq!(result.inner_command, Some("echo hello".to_string()));
     }
 }

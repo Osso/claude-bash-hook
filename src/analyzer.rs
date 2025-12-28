@@ -52,7 +52,16 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
     };
 
     let root = tree.root_node();
-    // Parse errors are ok - we still try to extract what we can
+
+    // Check for syntax errors in the parse tree
+    if root.has_error() {
+        let error_msg = find_syntax_error(root, cmd.as_bytes());
+        return AnalysisResult {
+            commands: vec![],
+            success: false,
+            error: Some(error_msg),
+        };
+    }
 
     let mut commands = Vec::new();
     walk_node(root, cmd.as_bytes(), &mut commands);
@@ -61,6 +70,54 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
         commands,
         success: true,
         error: None,
+    }
+}
+
+/// Find the first syntax error in the tree and return a helpful message
+fn find_syntax_error(node: Node, source: &[u8]) -> String {
+    // Find ERROR or MISSING nodes
+    if node.is_error() || node.is_missing() {
+        let start = node.start_position();
+        let context = get_error_context(node, source);
+        return format!(
+            "Syntax error at column {}: {}",
+            start.column + 1,
+            context
+        );
+    }
+
+    // Recurse into children
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.has_error() || child.is_error() || child.is_missing() {
+            return find_syntax_error(child, source);
+        }
+    }
+
+    "Unknown syntax error".to_string()
+}
+
+/// Get context around a syntax error
+fn get_error_context(node: Node, source: &[u8]) -> String {
+    let start = node.start_byte();
+    let end = node.end_byte().min(source.len());
+
+    // Get some context before and after
+    let context_start = start.saturating_sub(20);
+    let context_end = (end + 20).min(source.len());
+
+    let before = String::from_utf8_lossy(&source[context_start..start]);
+    let error_text = if start < end {
+        String::from_utf8_lossy(&source[start..end])
+    } else {
+        std::borrow::Cow::Borrowed("<missing>")
+    };
+    let after = String::from_utf8_lossy(&source[end..context_end]);
+
+    if node.is_missing() {
+        format!("expected {} near '{}▶◀{}'", node.kind(), before.trim(), after.trim())
+    } else {
+        format!("unexpected '{}' near '{}▶{}◀{}'", error_text, before.trim(), error_text, after.trim())
     }
 }
 
@@ -196,5 +253,48 @@ mod tests {
         assert_eq!(result.commands.len(), 2);
         assert_eq!(result.commands[0].name, "read");
         assert_eq!(result.commands[1].name, "echo");
+    }
+
+    // Syntax error tests
+    #[test]
+    fn test_unclosed_bracket() {
+        let result = analyze("if [ $x == 1; then echo yes; fi");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_missing_do() {
+        let result = analyze("for f in *.txt; echo $f; done");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_unclosed_quote() {
+        let result = analyze("echo \"hello");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_bad_comparison() {
+        let result = analyze("if [[ $x = 1 ]]; then echo yes; fi");
+        // This is actually valid bash - single = works in [[]]
+        assert!(result.success);
+    }
+
+    #[test]
+    fn test_missing_then() {
+        let result = analyze("if [ -f file ]; echo yes; fi");
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_unmatched_paren() {
+        let result = analyze("(ls; pwd");
+        assert!(!result.success);
+        assert!(result.error.is_some());
     }
 }
