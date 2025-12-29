@@ -2,6 +2,7 @@
 //!
 //! A PreToolUse hook that analyzes bash and nushell commands and provides granular permission control.
 
+mod advice;
 mod analyzer;
 mod config;
 mod docker;
@@ -116,6 +117,20 @@ fn main() {
         result
     };
 
+    // Build reason, optionally with AI advice
+    let reason = if config.enable_advice
+        && matches!(result.permission, Permission::Ask | Permission::Deny)
+    {
+        let base_reason = format_reason(&command, &result);
+        if let Some(advice) = advice::get_advice(&command, &result.reason, &result.permission) {
+            format!("{}\n{}", base_reason, advice)
+        } else {
+            base_reason
+        }
+    } else {
+        format_reason(&command, &result)
+    };
+
     // Output the decision for allow/ask/deny
     let output = HookOutput {
         hook_output: HookSpecificOutput {
@@ -126,7 +141,7 @@ fn main() {
                 Permission::Ask => "ask".to_string(),
                 Permission::Deny => "deny".to_string(),
             },
-            reason: format_reason(&command, &result),
+            reason,
         },
     };
 

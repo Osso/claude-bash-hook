@@ -37,6 +37,10 @@ pub struct Config {
     #[serde(default = "default_permission")]
     pub default: String,
 
+    /// Enable AI-powered advice for permission decisions
+    #[serde(default)]
+    pub enable_advice: bool,
+
     /// Command rules
     #[serde(default)]
     pub rules: Vec<Rule>,
