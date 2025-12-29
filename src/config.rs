@@ -70,6 +70,10 @@ pub struct Rule {
     /// Host rules for check_host permission
     #[serde(default)]
     pub host_rules: Vec<HostRule>,
+
+    /// Required working directory (glob pattern, e.g., "/home/user/Projects/linux")
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// Host-based permission rule
@@ -137,12 +141,17 @@ impl Config {
 
     /// Check a command against rules
     pub fn check_command(&self, name: &str, args: &[String]) -> PermissionResult {
+        self.check_command_with_cwd(name, args, None)
+    }
+
+    /// Check a command against rules with an optional cwd override
+    pub fn check_command_with_cwd(&self, name: &str, args: &[String], cwd: Option<&str>) -> PermissionResult {
         // First check for suggestions
         let suggestion = self.find_suggestion(name, args);
 
         // Then match against rules
         for rule in &self.rules {
-            if let Some(result) = self.match_rule(rule, name, args, suggestion.clone()) {
+            if let Some(result) = self.match_rule_with_cwd(rule, name, args, cwd, suggestion.clone()) {
                 return result;
             }
         }
@@ -186,8 +195,26 @@ impl Config {
         args: &[String],
         suggestion: Option<String>,
     ) -> Option<PermissionResult> {
+        self.match_rule_with_cwd(rule, name, args, None, suggestion)
+    }
+
+    /// Match a single rule with optional cwd override
+    fn match_rule_with_cwd(
+        &self,
+        rule: &Rule,
+        name: &str,
+        args: &[String],
+        cwd: Option<&str>,
+        suggestion: Option<String>,
+    ) -> Option<PermissionResult> {
         for pattern in &rule.commands {
             if self.matches_pattern(pattern, name, args) {
+                // Check cwd constraint if present
+                if let Some(ref cwd_pattern) = rule.cwd {
+                    if !self.matches_cwd(cwd_pattern, cwd) {
+                        continue;
+                    }
+                }
                 return Some(PermissionResult {
                     permission: self.parse_permission(&rule.permission),
                     reason: rule.reason.clone(),
@@ -196,6 +223,43 @@ impl Config {
             }
         }
         None
+    }
+
+    /// Check if current working directory matches the pattern
+    fn matches_cwd(&self, pattern: &str, cwd_override: Option<&str>) -> bool {
+        let cwd_str = if let Some(override_cwd) = cwd_override {
+            // Use the provided cwd override, canonicalizing it
+            let path = std::path::Path::new(override_cwd);
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            canonical.to_string_lossy().to_string()
+        } else {
+            // Fall back to actual current directory
+            let Ok(cwd) = std::env::current_dir() else {
+                return false;
+            };
+            let cwd = cwd.canonicalize().unwrap_or(cwd);
+            let Some(s) = cwd.to_str() else {
+                return false;
+            };
+            s.to_string()
+        };
+
+        // Expand ~ to home directory in pattern
+        let expanded = if pattern.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                format!("{}{}", home, &pattern[1..])
+            } else {
+                pattern.to_string()
+            }
+        } else {
+            pattern.to_string()
+        };
+        // Resolve symlinks in pattern path too
+        let expanded = std::path::Path::new(&expanded)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(expanded);
+        glob_match(&expanded, &cwd_str)
     }
 
     /// Match a rule with host checking
@@ -209,6 +273,12 @@ impl Config {
     ) -> Option<PermissionResult> {
         for pattern in &rule.commands {
             if self.matches_pattern(pattern, name, args) {
+                // Check cwd constraint if present
+                if let Some(ref cwd_pattern) = rule.cwd {
+                    if !self.matches_cwd(cwd_pattern, None) {
+                        continue;
+                    }
+                }
                 // Check if this is a host-checking rule
                 if rule.permission == "check_host" {
                     if let Some(h) = host {

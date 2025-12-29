@@ -29,6 +29,7 @@ struct HookInput {
 #[derive(Debug, Deserialize)]
 struct ToolInput {
     command: Option<String>,
+    cwd: Option<String>,
 }
 
 /// Check if edits are allowed based on permission mode
@@ -93,7 +94,7 @@ fn main() {
 
     // Analyze the command (bash or nushell)
     let result = if is_nushell {
-        analyze_nushell_command(&command, &config, edit_mode)
+        analyze_nushell_command(&command, &config, edit_mode, hook_input.tool_input.cwd.as_deref())
     } else {
         analyze_command(&command, &config, edit_mode)
     };
@@ -189,7 +190,7 @@ fn analyze_command(command: &str, config: &Config, edit_mode: bool) -> Permissio
 }
 
 /// Analyze a nushell command and return the most restrictive permission
-fn analyze_nushell_command(command: &str, config: &Config, edit_mode: bool) -> PermissionResult {
+fn analyze_nushell_command(command: &str, config: &Config, edit_mode: bool, cwd: Option<&str>) -> PermissionResult {
     let analysis = nushell::analyze(command);
 
     if !analysis.success {
@@ -214,7 +215,7 @@ fn analyze_nushell_command(command: &str, config: &Config, edit_mode: bool) -> P
     most_restrictive.permission = Permission::Allow;
 
     for cmd in &analysis.commands {
-        let result = check_single_command(cmd, config, edit_mode, None, false);
+        let result = check_single_command(cmd, config, edit_mode, cwd, false);
 
         if result.permission > most_restrictive.permission {
             most_restrictive = result;
@@ -340,7 +341,7 @@ fn check_single_command(
     }
 
     // Regular command - check against rules
-    config.check_command(&cmd.name, &cmd.args)
+    config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd)
 }
 
 /// Format the reason string
