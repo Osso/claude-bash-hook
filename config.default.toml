@@ -6,6 +6,9 @@
 # "passthrough" lets Claude Code's built-in permission system handle it
 default = "passthrough"
 
+# Enable AI-powered advice for permission decisions (uses claude-safe CLI)
+enable_advice = false
+
 # Rules are checked in order - first match wins
 # More specific rules should come before general ones
 
@@ -15,7 +18,7 @@ commands = [
     "ls", "cat", "head", "tail", "less", "more", "man",
     "pwd", "whoami", "hostname", "uname", "id", "groups",
     "ps", "top", "htop", "df", "du", "free", "uptime", "date",
-    "grep", "rg", "find", "fdfind", "locate", "wc", "diff", "sort", "uniq", "shuf", "which", "whereis", "file", "tr", "cut", "basename", "dirname", "readlink", "base64", "xxd", "od", "zcat", "zgrep", "gzip", "gzip -d", "gunzip", "bsdtar -xOf", "bsdtar -tvf", "bsdtar -tf", "comm", "command -v",
+    "grep", "rg", "find", "fd", "fdfind", "locate", "wc", "diff", "sort", "uniq", "shuf", "which", "whereis", "file", "tr", "cut", "basename", "dirname", "readlink", "base64", "xxd", "od", "zcat", "zgrep", "gzip", "gzip -d", "gunzip", "bsdtar -xOf", "bsdtar -tvf", "bsdtar -tf", "comm", "command -v",
     "jq", "yq", "xq",
     "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false", "touch",
     "sed", "awk",  # sed -i requires edit mode
