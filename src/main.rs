@@ -11,6 +11,7 @@ mod nushell;
 mod rm;
 mod sql;
 mod tar;
+mod tee;
 mod wrappers;
 
 use config::{Config, Permission, PermissionResult};
@@ -366,6 +367,13 @@ fn check_single_command(
     // Special handling for rm - allow deletion under /tmp/
     if cmd.name == "rm" {
         if let Some(result) = rm::check_rm(cmd) {
+            return result;
+        }
+    }
+
+    // Special handling for tee - allow writing to /tmp/claude/
+    if cmd.name == "tee" {
+        if let Some(result) = tee::check_tee(cmd) {
             return result;
         }
     }
