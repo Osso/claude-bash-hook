@@ -22,7 +22,7 @@ commands = [
     "jq", "yq", "xq",
     "cd", "echo", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false", "touch",
     "sed", "awk",  # sed -i requires edit mode
-    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "infocmp", "btrfs subvolume list", "gemini --version", "rfkill list", "blkid", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list", "coredumpctl list", "iptables -L", "varlinkctl info", "varlinkctl introspect",
+    "lsblk", "ldd", "lspci", "lscpu", "lsusb", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "infocmp", "btrfs subvolume list", "btrfs filesystem du", "gemini --version", "rfkill list", "blkid", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list", "coredumpctl list", "iptables -L", "varlinkctl info", "varlinkctl introspect",
     "sleep", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves", "tokei",
     "curl -s https://ifconfig.me",
     "quickshell ipc query",
