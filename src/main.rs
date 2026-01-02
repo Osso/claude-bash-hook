@@ -208,6 +208,7 @@ fn analyze_command(
             config,
             edit_mode,
             virtual_cwd.as_deref(),
+            initial_cwd,
             has_uncertain_flow,
         );
 
@@ -261,7 +262,8 @@ fn analyze_nushell_command(
     most_restrictive.permission = Permission::Allow;
 
     for cmd in &analysis.commands {
-        let result = check_single_command(cmd, config, edit_mode, cwd, false);
+        // For nushell, cwd is both virtual and initial (no cd tracking)
+        let result = check_single_command(cmd, config, edit_mode, cwd, cwd, false);
 
         if result.permission > most_restrictive.permission {
             most_restrictive = result;
@@ -277,6 +279,7 @@ fn check_single_command(
     config: &Config,
     edit_mode: bool,
     virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
     has_uncertain_flow: bool,
 ) -> PermissionResult {
     // Check if this is a wrapper command
@@ -364,16 +367,16 @@ fn check_single_command(
         }
     }
 
-    // Special handling for rm - allow deletion under /tmp/
+    // Special handling for rm - allow deletion under /tmp/ or project dir
     if cmd.name == "rm" {
-        if let Some(result) = rm::check_rm(cmd) {
+        if let Some(result) = rm::check_rm(cmd, initial_cwd) {
             return result;
         }
     }
 
-    // Special handling for tee - allow writing to /tmp/claude/
+    // Special handling for tee - allow writing to /tmp/ or /tmp/claude/ based on project
     if cmd.name == "tee" {
-        if let Some(result) = tee::check_tee(cmd) {
+        if let Some(result) = tee::check_tee(cmd, initial_cwd) {
             return result;
         }
     }
