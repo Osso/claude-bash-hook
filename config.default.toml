@@ -39,7 +39,7 @@ reason = "read-only commands"
 [[rules]]
 commands = [
     "git status", "git log", "git diff", "git branch",
-    "git remote", "git show", "git rev-parse", "git describe", "git merge-base", "git ls-files", "git tag",
+    "git remote", "git show", "git rev-parse", "git describe", "git merge-base", "git ls-files", "git tag", "git cat-file",
 ]
 permission = "allow"
 reason = "git read-only"
