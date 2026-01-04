@@ -26,9 +26,9 @@ struct HookInput {
     /// Permission mode: "default", "plan", "acceptEdits", "bypassPermissions"
     #[serde(default)]
     permission_mode: Option<String>,
-    /// Initial working directory where Claude Code session started
+    /// Working directory where Claude Code session started
     #[serde(default)]
-    initial_cwd: Option<String>,
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,12 +106,7 @@ fn main() {
             hook_input.tool_input.cwd.as_deref(),
         )
     } else {
-        analyze_command(
-            &command,
-            &config,
-            edit_mode,
-            hook_input.initial_cwd.as_deref(),
-        )
+        analyze_command(&command, &config, edit_mode, hook_input.cwd.as_deref())
     };
 
     // For "passthrough" permission on Bash, let Claude Code's built-in system handle it

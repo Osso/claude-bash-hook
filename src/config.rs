@@ -220,7 +220,7 @@ impl Config {
         suggestion: Option<String>,
     ) -> Option<PermissionResult> {
         for pattern in &rule.commands {
-            if self.matches_pattern(pattern, name, args) {
+            if self.matches_pattern_with_cwd(pattern, name, args, cwd) {
                 // Check cwd constraint if present
                 if let Some(ref cwd_pattern) = rule.cwd {
                     if !self.matches_cwd(cwd_pattern, cwd) {
@@ -323,6 +323,38 @@ impl Config {
         None
     }
 
+    /// Check if a command matches a pattern, also trying relative to cwd
+    fn matches_pattern_with_cwd(
+        &self,
+        pattern: &str,
+        name: &str,
+        args: &[String],
+        cwd: Option<&str>,
+    ) -> bool {
+        // Try direct match first
+        if self.matches_pattern(pattern, name, args) {
+            return true;
+        }
+
+        // If command is absolute and pattern is relative, try matching relative to cwd
+        if let Some(cwd) = cwd {
+            if name.starts_with('/') && !pattern.starts_with('/') {
+                let cwd_with_slash = if cwd.ends_with('/') {
+                    cwd.to_string()
+                } else {
+                    format!("{}/", cwd)
+                };
+                if let Some(relative) = name.strip_prefix(&cwd_with_slash) {
+                    if self.matches_pattern(pattern, relative, args) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     /// Check if a command matches a pattern
     /// Pattern can be:
     /// - "ls" - just the command name
@@ -340,7 +372,10 @@ impl Config {
         let normalized_name = name.strip_prefix("./").unwrap_or(name);
 
         // Normalize command name to basename (e.g., /usr/bin/ls -> ls)
-        let cmd_basename = normalized_name.rsplit('/').next().unwrap_or(normalized_name);
+        let cmd_basename = normalized_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(normalized_name);
 
         // First part must match command name (or its basename)
         if pattern_cmd != normalized_name && pattern_cmd != cmd_basename {
@@ -644,5 +679,34 @@ mod tests {
 
         let result = config.check_command("target/release/bar", &[]);
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_absolute_path_matches_relative_pattern_with_cwd() {
+        // Pattern is relative, command is absolute, should match when cwd aligns
+        let toml = r#"
+            [[rules]]
+            commands = ["target/release/myapp"]
+            permission = "allow"
+            reason = "test"
+            cwd = "/home/user/project"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+
+        // Absolute path matching relative pattern with cwd
+        let result = config.check_command_with_cwd(
+            "/home/user/project/target/release/myapp",
+            &[],
+            Some("/home/user/project"),
+        );
+        assert_eq!(result.permission, Permission::Allow);
+
+        // Should NOT match with different cwd (default is Ask when no rule matches)
+        let result = config.check_command_with_cwd(
+            "/home/user/project/target/release/myapp",
+            &[],
+            Some("/home/other/project"),
+        );
+        assert_eq!(result.permission, Permission::Ask);
     }
 }
