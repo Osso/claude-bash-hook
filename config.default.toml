@@ -19,10 +19,10 @@ commands = [
     "pwd", "whoami", "hostname", "uname", "id", "groups",
     "ps", "top", "htop", "df", "du", "free", "uptime", "date",
     "grep", "rg", "find", "fd", "fdfind", "locate", "wc", "diff", "sort", "uniq", "shuf", "which", "whereis", "file", "tr", "cut", "paste", "col", "basename", "dirname", "readlink", "base64", "xxd", "od", "zcat", "zgrep", "gzip", "gzip -d", "gunzip", "bsdtar -xOf", "bsdtar -tvf", "bsdtar -tf", "comm", "command -v",
-    "jq", "yq", "xq", "bc",
-    "cd", "echo", "read", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false", "touch", "unset",
+    "jq", "yq", "xq", "bc", "python3 -m json.tool",
+    "cd", "echo", "read", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false", "touch", "unset", "break", "continue", "return", "exit",
     "sed", "sed -n", "awk", "sd", "perl", "perl -pe",  # inline only; -i variants denied below
-    "lsblk", "findmnt", "ldd", "nm", "nm -D", "readelf", "objdump", "lspci", "lscpu", "lsusb", "pkg-config --list-all", "conntrack -L", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "infocmp", "crontab -l", "xkbcli list", "btrfs subvolume list", "btrfs filesystem df", "btrfs filesystem du", "btrfs filesystem show", "btrfs filesystem usage", "gemini --version", "rfkill list", "blkid", "nvme id-ns", "sfdisk -l", "efibootmgr -v", "mokutil --sb-state", "bootctl status", "rustc --print", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list", "coredumpctl list", "iptables -L", "varlinkctl info", "varlinkctl introspect",
+    "lsblk", "findmnt", "ldd", "nm", "nm -D", "readelf", "objdump", "lspci", "lscpu", "lsusb", "pkg-config --list-all", "conntrack -L", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "pdftotext", "magick identify", "infocmp", "crontab -l", "xkbcli list", "btrfs subvolume list", "btrfs filesystem df", "btrfs filesystem du", "btrfs filesystem show", "btrfs filesystem usage", "gemini --version", "rfkill list", "blkid", "nvme id-ns", "sfdisk -l", "efibootmgr -v", "mokutil --sb-state", "bootctl status", "rustc --print", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list", "coredumpctl list", "iptables -L", "varlinkctl info", "varlinkctl introspect",
     "sleep", "disown", "jobs", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves", "tokei",
     "curl -s https://ifconfig.me",
     "quickshell ipc query",
@@ -95,7 +95,7 @@ reason = "kubectl read-only and safe operations"
 [[rules]]
 commands = [
     "glab mr list", "glab mr view", "glab mr update",
-    "gh repo list", "gh issue list", "gh issue view", "gh pr view",
+    "gh repo list", "gh issue list", "gh issue view", "gh pr view", "gh run list", "gh run view",
     "glab ci status", "glab ci list", "glab ci view", "glab ci trace",
     "glab ci run", "glab ci retry", "glab ci trigger",
     "glab issue list", "glab issue view",
@@ -103,6 +103,12 @@ commands = [
 ]
 permission = "allow"
 reason = "glab read-only and safe operations"
+
+# raw api - deny (use specific subcommands instead)
+[[rules]]
+commands = ["gitlab api", "gh api"]
+permission = "deny"
+reason = "use specific subcommands instead of raw api"
 
 # gitlab CLI read-only
 [[rules]]
@@ -336,6 +342,10 @@ opts_with_args = ["-c", "--commands"]
 [[wrappers]]
 command = "fish"
 opts_with_args = ["-c", "-C", "--init-command"]
+
+[[wrappers]]
+command = "stdbuf"
+opts_with_args = ["-i", "--input", "-o", "--output", "-e", "--error"]
 
 # These have special handling (hardcoded) - listed here for documentation:
 # - ssh: extracts host, inner command after host

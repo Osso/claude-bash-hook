@@ -4,3 +4,111 @@
 
 pub mod php;
 pub mod python;
+
+use crate::analyzer::Command;
+use crate::config::{Config, Permission, PermissionResult};
+
+/// Check if an interpreter command (e.g. python3 script.py) runs a script
+/// that would be allowed by config rules on its own.
+pub fn check_interpreter_script(
+    cmd: &Command,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+) -> Option<PermissionResult> {
+    // Skip module execution (-m) which is handled by config rules like "python3 -m json.tool"
+    if cmd.args.iter().any(|a| a == "-m") {
+        return None;
+    }
+
+    // Find the first non-flag arg (the script path)
+    let script = cmd.args.iter().find(|a| !a.starts_with('-'))?;
+
+    // Check if the script path is allowed as a command
+    let result = config.check_command_with_cwd(script, &[], virtual_cwd);
+    if result.permission == Permission::Allow {
+        return Some(result);
+    }
+    if initial_cwd != virtual_cwd {
+        let result = config.check_command_with_cwd(script, &[], initial_cwd);
+        if result.permission == Permission::Allow {
+            return Some(result);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_cmd(name: &str, args: &[&str]) -> Command {
+        Command {
+            name: name.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            text: format!("{} {}", name, args.join(" ")),
+        }
+    }
+
+    fn config_with_script(script: &str) -> Config {
+        let toml = format!(
+            r#"
+            [[rules]]
+            commands = ["{}"]
+            permission = "allow"
+            reason = "allowed script"
+        "#,
+            script
+        );
+        toml::from_str(&toml).unwrap()
+    }
+
+    #[test]
+    fn test_python3_allowed_script() {
+        let config = config_with_script("scripts/compare_refs.py");
+        let cmd = make_cmd("python3", &["scripts/compare_refs.py", "arg1"]);
+        let result = check_interpreter_script(&cmd, &config, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_python3_unknown_script_returns_none() {
+        let config = config_with_script("scripts/compare_refs.py");
+        let cmd = make_cmd("python3", &["scripts/other.py"]);
+        let result = check_interpreter_script(&cmd, &config, None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_python3_dash_m_skipped() {
+        let config = config_with_script("json.tool");
+        let cmd = make_cmd("python3", &["-m", "json.tool"]);
+        let result = check_interpreter_script(&cmd, &config, None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_python3_dash_c_no_script_path() {
+        let config = config_with_script("scripts/foo.py");
+        let cmd = make_cmd("python3", &["-c", "print('hi')"]);
+        // -c's argument "print('hi')" won't match any script rule
+        let result = check_interpreter_script(&cmd, &config, None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_python3_script_with_cwd() {
+        let toml = r#"
+            [[rules]]
+            commands = ["scripts/compare_refs.py"]
+            permission = "allow"
+            reason = "allowed script"
+            cwd = "/home/user/project"
+        "#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let cmd = make_cmd("python3", &["scripts/compare_refs.py"]);
+        let result =
+            check_interpreter_script(&cmd, &config, None, Some("/home/user/project")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+}

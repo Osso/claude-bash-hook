@@ -1,0 +1,90 @@
+//! Cargo-specific command handling
+
+use crate::analyzer::Command;
+use crate::config::{Permission, PermissionResult};
+
+/// Allow running binaries from target/debug/ or target/release/ when under project cwd.
+/// E.g., /home/user/project/target/debug/myapp is allowed when cwd is /home/user/project
+pub fn check_target_binary(
+    cmd: &Command,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+) -> Option<PermissionResult> {
+    if !is_cargo_target_binary(&cmd.name) {
+        return None;
+    }
+
+    let cwds = [virtual_cwd, initial_cwd];
+    for cwd in cwds.into_iter().flatten() {
+        let prefix = if cwd.ends_with('/') {
+            cwd.to_string()
+        } else {
+            format!("{}/", cwd)
+        };
+        if cmd.name.starts_with(&prefix) {
+            return Some(PermissionResult {
+                permission: Permission::Allow,
+                reason: "cargo target binary in project dir".to_string(),
+                suggestion: None,
+            });
+        }
+    }
+
+    None
+}
+
+fn is_cargo_target_binary(name: &str) -> bool {
+    name.contains("/target/debug/") || name.contains("/target/release/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_cmd(name: &str, args: &[&str]) -> Command {
+        Command {
+            name: name.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            text: format!("{} {}", name, args.join(" ")),
+        }
+    }
+
+    #[test]
+    fn test_target_debug_in_project_allowed() {
+        let cmd = make_cmd(
+            "/home/user/project/target/debug/myapp",
+            &["dump-tree", "--filter", "Foo"],
+        );
+        let result = check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_target_release_in_project_allowed() {
+        let cmd = make_cmd("/home/user/project/target/release/myapp", &["--help"]);
+        let result = check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_target_binary_outside_project_returns_none() {
+        let cmd = make_cmd("/other/project/target/debug/myapp", &[]);
+        let result = check_target_binary(&cmd, None, Some("/home/user/project"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_target_binary_virtual_cwd() {
+        let cmd = make_cmd("/home/user/project/target/debug/myapp", &[]);
+        let result =
+            check_target_binary(&cmd, Some("/home/user/project"), Some("/other/dir")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_non_target_binary_returns_none() {
+        let cmd = make_cmd("/usr/bin/ls", &[]);
+        let result = check_target_binary(&cmd, None, Some("/usr"));
+        assert!(result.is_none());
+    }
+}

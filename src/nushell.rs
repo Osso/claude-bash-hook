@@ -80,6 +80,12 @@ const SAFE_NUSHELL_BUILTINS: &[&str] = &[
     "reverse",
     "sort-by",
     "uniq",
+    "reject",
+    "rename",
+    "move",
+    "insert",
+    "update",
+    "upsert",
     "flatten",
     "transpose",
     "group-by",
@@ -167,6 +173,74 @@ fn extract_external_commands(
     }
 }
 
+/// Extract an external command call, skipping safe builtins
+fn extract_external_call(
+    expr: &nu_protocol::ast::Expression,
+    head: &nu_protocol::ast::Expression,
+    args: &[nu_protocol::ast::ExternalArgument],
+    source: &[u8],
+    commands: &mut Vec<Command>,
+) {
+    let name = span_to_string(head.span, source);
+    let clean_name = name.trim_start_matches('^');
+
+    if SAFE_NUSHELL_BUILTINS.contains(&clean_name) {
+        return;
+    }
+
+    let text = span_to_string(expr.span, source);
+    let arg_strings: Vec<String> = args
+        .iter()
+        .filter_map(|arg| match arg {
+            nu_protocol::ast::ExternalArgument::Regular(e) => {
+                Some(span_to_string(e.span, source))
+            }
+            nu_protocol::ast::ExternalArgument::Spread(e) => {
+                Some(span_to_string(e.span, source))
+            }
+        })
+        .collect();
+
+    commands.push(Command {
+        name: clean_name.to_string(),
+        args: arg_strings,
+        text: text.trim_start_matches('^').to_string(),
+    });
+}
+
+/// Dangerous nushell builtins that modify filesystem
+const DANGEROUS_BUILTINS: &[&str] = &["rm", "mv", "cp", "mkdir", "touch", "save"];
+
+/// Extract a dangerous builtin call and recurse into arguments
+fn extract_builtin_call(
+    expr: &nu_protocol::ast::Expression,
+    call: &nu_protocol::ast::Call,
+    source: &[u8],
+    commands: &mut Vec<Command>,
+) {
+    let call_name = span_to_string(call.head, source);
+
+    if DANGEROUS_BUILTINS.contains(&call_name.as_str()) {
+        let arg_strings: Vec<String> = call
+            .arguments
+            .iter()
+            .filter_map(|arg| arg.expr().map(|e| span_to_string(e.span, source)))
+            .collect();
+
+        commands.push(Command {
+            name: call_name,
+            args: arg_strings,
+            text: span_to_string(expr.span, source),
+        });
+    }
+
+    for arg in &call.arguments {
+        if let Some(e) = arg.expr() {
+            extract_from_expression(e, source, commands);
+        }
+    }
+}
+
 /// Extract external commands from an expression
 fn extract_from_expression(
     expr: &nu_protocol::ast::Expression,
@@ -177,76 +251,10 @@ fn extract_from_expression(
 
     match &expr.expr {
         Expr::ExternalCall(head, args) => {
-            // External command - check all of them regardless of ^ prefix
-            // The ^ is optional in nushell, so `rm` and `^rm` are equivalent
-            let name = span_to_string(head.span, source);
-            let clean_name = name.trim_start_matches('^');
-
-            // Skip safe nushell builtins (parser treats them as external without stdlib)
-            if SAFE_NUSHELL_BUILTINS.contains(&clean_name) {
-                return;
-            }
-
-            let text = span_to_string(expr.span, source);
-
-            let arg_strings: Vec<String> = args
-                .iter()
-                .filter_map(|arg| match arg {
-                    nu_protocol::ast::ExternalArgument::Regular(e) => {
-                        Some(span_to_string(e.span, source))
-                    }
-                    nu_protocol::ast::ExternalArgument::Spread(e) => {
-                        Some(span_to_string(e.span, source))
-                    }
-                })
-                .collect();
-
-            commands.push(Command {
-                name: clean_name.to_string(),
-                args: arg_strings,
-                text: text.trim_start_matches('^').to_string(),
-            });
+            extract_external_call(expr, head, args, source, commands);
         }
         Expr::Call(call) => {
-            // Check if this is a dangerous builtin command
-            // Nushell has builtins like rm, mv, cp that modify filesystem
-            let call_name = span_to_string(call.head, source);
-
-            // Dangerous builtins that should be checked
-            // Note: nushell's `open` is read-only (reads files for pipeline), unlike shell `open`
-            let dangerous_builtins = ["rm", "mv", "cp", "mkdir", "touch", "save"];
-
-            if dangerous_builtins.contains(&call_name.as_str()) {
-                // Extract arguments
-                let arg_strings: Vec<String> = call
-                    .arguments
-                    .iter()
-                    .filter_map(|arg| arg.expr().map(|e| span_to_string(e.span, source)))
-                    .collect();
-
-                commands.push(Command {
-                    name: call_name.clone(),
-                    args: arg_strings,
-                    text: span_to_string(expr.span, source),
-                });
-            }
-
-            // Also recurse into arguments for nested commands
-            for arg in &call.arguments {
-                if let Some(e) = arg.expr() {
-                    extract_from_expression(e, source, commands);
-                }
-            }
-        }
-        Expr::Block(block_id) => {
-            // Would need engine state to resolve block - skip for now
-            let _ = block_id;
-        }
-        Expr::Closure(block_id) => {
-            let _ = block_id;
-        }
-        Expr::Subexpression(block_id) => {
-            let _ = block_id;
+            extract_builtin_call(expr, call, source, commands);
         }
         Expr::List(items) => {
             for item in items {
