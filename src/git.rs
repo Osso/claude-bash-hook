@@ -75,10 +75,27 @@ pub fn check_git_push(
         return None;
     }
 
-    // Check for dangerous force push (not --force-with-lease which is safer)
     let has_dangerous_force = cmd.args.iter().any(|a| a == "-f" || a == "--force");
     let has_force_with_lease = cmd.args.iter().any(|a| a == "--force-with-lease");
+    let target_branch = get_push_target_branch(cmd);
 
+    let is_protected = target_branch
+        .as_ref()
+        .is_some_and(|b| PROTECTED_BRANCHES.contains(&b.as_str()));
+
+    // Force push to protected branch - always deny
+    if has_dangerous_force && is_protected {
+        return Some(PermissionResult {
+            permission: Permission::Deny,
+            reason: format!(
+                "force push to protected branch '{}'",
+                target_branch.as_deref().unwrap_or("unknown")
+            ),
+            suggestion: None,
+        });
+    }
+
+    // Force push to non-protected branch - ask
     if has_dangerous_force {
         return Some(PermissionResult {
             permission: Permission::Ask,
@@ -87,31 +104,27 @@ pub fn check_git_push(
         });
     }
 
-    // Try to determine the target branch
-    let target_branch = get_push_target_branch(cmd);
-
-    if let Some(branch) = &target_branch {
-        if PROTECTED_BRANCHES.contains(&branch.as_str()) {
-            // Check if this directory is allowed to push to master
-            if config.is_master_push_allowed(cwd) {
-                return Some(PermissionResult {
-                    permission: Permission::Allow,
-                    reason: format!("push to '{}' (allowed directory)", branch),
-                    suggestion: None,
-                });
-            }
-
-            let reason = if has_force_with_lease {
-                format!("force push to protected branch '{}'", branch)
-            } else {
-                format!("push to protected branch '{}'", branch)
-            };
+    if is_protected {
+        // Check if this directory is allowed to push to master
+        let branch = target_branch.as_deref().unwrap_or("unknown");
+        if config.is_master_push_allowed(cwd) {
             return Some(PermissionResult {
-                permission: Permission::Ask,
-                reason,
+                permission: Permission::Allow,
+                reason: format!("push to '{}' (allowed directory)", branch),
                 suggestion: None,
             });
         }
+
+        let reason = if has_force_with_lease {
+            format!("force push to protected branch '{}'", branch)
+        } else {
+            format!("push to protected branch '{}'", branch)
+        };
+        return Some(PermissionResult {
+            permission: Permission::Ask,
+            reason,
+            suggestion: None,
+        });
     }
 
     // Allow push (including --force-with-lease) to non-protected branches
@@ -193,11 +206,32 @@ mod tests {
     }
 
     #[test]
-    fn test_force_push_asks() {
-        let cmd = make_cmd(&["push", "-f"]);
+    fn test_force_push_to_feature_asks() {
+        let cmd = make_cmd(&["push", "-f", "origin", "feature-branch"]);
         let result = check_git_push(&cmd, &default_config(), None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
         assert!(result.suggestion.is_some()); // suggests --force-with-lease
+    }
+
+    #[test]
+    fn test_force_push_to_main_denied() {
+        let cmd = make_cmd(&["push", "-f", "origin", "main"]);
+        let result = check_git_push(&cmd, &default_config(), None).unwrap();
+        assert_eq!(result.permission, Permission::Deny);
+    }
+
+    #[test]
+    fn test_force_push_to_master_denied() {
+        let cmd = make_cmd(&["push", "--force", "origin", "master"]);
+        let result = check_git_push(&cmd, &default_config(), None).unwrap();
+        assert_eq!(result.permission, Permission::Deny);
+    }
+
+    #[test]
+    fn test_force_push_refspec_to_main_denied() {
+        let cmd = make_cmd(&["push", "-f", "origin", "HEAD:main"]);
+        let result = check_git_push(&cmd, &default_config(), None).unwrap();
+        assert_eq!(result.permission, Permission::Deny);
     }
 
     #[test]
