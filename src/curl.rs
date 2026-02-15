@@ -50,108 +50,66 @@ fn extract_host(url: &str) -> Option<String> {
     }
 }
 
-/// Check a curl command and extract URL hosts
-/// Returns a permission result based on the URL host
-pub fn check_curl(cmd: &Command, config: &Config) -> Option<PermissionResult> {
-    if cmd.name != "curl" {
-        return None;
-    }
+/// Options that take an argument (skip them when looking for URLs)
+const OPTS_WITH_ARGS: &[&str] = &[
+    "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar",
+    "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+    "-D", "--dump-header", "-e", "--referer", "-F", "--form",
+    "-H", "--header", "-K", "--config", "-m", "--max-time",
+    "-o", "--output", "-O", "--remote-name", "-T", "--upload-file",
+    "-u", "--user", "-w", "--write-out", "-x", "--proxy",
+    "-X", "--request", "--connect-timeout", "--retry", "--retry-delay",
+    "--retry-max-time", "-r", "--range", "--resolve", "--interface",
+    "-E", "--cert", "--key", "--cacert",
+];
 
-    // Options that take an argument (skip them when looking for URLs)
-    let opts_with_args = [
-        "-A",
-        "--user-agent",
-        "-b",
-        "--cookie",
-        "-c",
-        "--cookie-jar",
-        "-d",
-        "--data",
-        "--data-raw",
-        "--data-binary",
-        "--data-urlencode",
-        "-D",
-        "--dump-header",
-        "-e",
-        "--referer",
-        "-F",
-        "--form",
-        "-H",
-        "--header",
-        "-K",
-        "--config",
-        "-m",
-        "--max-time",
-        "-o",
-        "--output",
-        "-O",
-        "--remote-name",
-        "-T",
-        "--upload-file",
-        "-u",
-        "--user",
-        "-w",
-        "--write-out",
-        "-x",
-        "--proxy",
-        "-X",
-        "--request",
-        "--connect-timeout",
-        "--retry",
-        "--retry-delay",
-        "--retry-max-time",
-        "-r",
-        "--range",
-        "--resolve",
-        "--interface",
-        "-E",
-        "--cert",
-        "--key",
-        "--cacert",
-    ];
-
-    let mut urls: Vec<String> = Vec::new();
+/// Extract URL arguments from curl command args, skipping flags and their values
+fn extract_urls(args: &[String]) -> Vec<String> {
+    let mut urls = Vec::new();
     let mut skip_next = false;
 
-    for arg in &cmd.args {
+    for arg in args {
         if skip_next {
             skip_next = false;
             continue;
         }
 
-        // Skip options
         if arg.starts_with('-') {
-            // Check if this option takes an argument
             if arg.contains('=') {
-                // --option=value - no need to skip next
                 continue;
-            } else if arg.len() > 2 && arg.starts_with('-') && !arg.starts_with("--") {
+            } else if arg.len() > 2 && !arg.starts_with("--") {
                 // Combined short opts like -sLA - check if ANY takes an argument
-                // The last one that takes an arg will consume the next token
                 for c in arg[1..].chars() {
                     let opt = format!("-{}", c);
-                    if opts_with_args.contains(&opt.as_str()) {
+                    if OPTS_WITH_ARGS.contains(&opt.as_str()) {
                         skip_next = true;
                     }
                 }
-            } else if opts_with_args.contains(&arg.as_str()) {
+            } else if OPTS_WITH_ARGS.contains(&arg.as_str()) {
                 skip_next = true;
             }
             continue;
         }
 
-        // This looks like a URL
         urls.push(arg.clone());
     }
 
-    if urls.is_empty() {
-        // No URLs found - pass through to default handling
+    urls
+}
+
+/// Check a curl command and extract URL hosts
+/// Returns a permission result based on the URL host
+pub fn check_curl(cmd: &Command, config: &Config, edit_mode: bool) -> Option<PermissionResult> {
+    if cmd.name != "curl" {
         return None;
     }
 
-    // Extract hosts from URLs
-    let hosts: Vec<String> = urls.iter().filter_map(|url| extract_host(url)).collect();
+    let urls = extract_urls(&cmd.args);
+    if urls.is_empty() {
+        return None;
+    }
 
+    let hosts: Vec<String> = urls.iter().filter_map(|url| extract_host(url)).collect();
     if hosts.is_empty() {
         return None;
     }
@@ -159,13 +117,12 @@ pub fn check_curl(cmd: &Command, config: &Config) -> Option<PermissionResult> {
     // Check each host against config rules
     // Return the most restrictive result (or first non-passthrough)
     for host in &hosts {
-        let result = config.check_command_with_host("curl", &cmd.args, Some(host));
+        let result = config.check_command_with_host("curl", &cmd.args, Some(host), edit_mode);
         if result.permission != Permission::Passthrough {
             return Some(result);
         }
     }
 
-    // No specific rule - pass through
     None
 }
 
@@ -252,7 +209,7 @@ mod tests {
     fn test_curl_localhost_allowed() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["-s", "http://127.0.0.1:3000/debug"]);
-        let result = check_curl(&cmd, &config).unwrap();
+        let result = check_curl(&cmd, &config, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -264,7 +221,7 @@ mod tests {
             "Content-Type: application/json",
             "http://localhost:8080/api",
         ]);
-        let result = check_curl(&cmd, &config).unwrap();
+        let result = check_curl(&cmd, &config, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -272,7 +229,7 @@ mod tests {
     fn test_curl_allowed_host() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["https://gcdev.site/api"]);
-        let result = check_curl(&cmd, &config).unwrap();
+        let result = check_curl(&cmd, &config, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -280,7 +237,7 @@ mod tests {
     fn test_curl_external_asks() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["https://example.com/api"]);
-        let result = check_curl(&cmd, &config).unwrap();
+        let result = check_curl(&cmd, &config, false).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
 
@@ -296,7 +253,7 @@ mod tests {
         "#;
         let config: Config = toml::from_str(config_str).unwrap();
         let cmd = make_cmd(&["https://example.com/api"]);
-        let result = check_curl(&cmd, &config);
+        let result = check_curl(&cmd, &config, false);
         assert!(result.is_none());
     }
 
@@ -304,7 +261,7 @@ mod tests {
     fn test_curl_no_url() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["--help"]);
-        let result = check_curl(&cmd, &config);
+        let result = check_curl(&cmd, &config, false);
         assert!(result.is_none());
     }
 
@@ -316,7 +273,7 @@ mod tests {
             args: vec!["http://localhost".to_string()],
             text: "wget http://localhost".to_string(),
         };
-        let result = check_curl(&cmd, &config);
+        let result = check_curl(&cmd, &config, false);
         assert!(result.is_none());
     }
 
@@ -331,7 +288,7 @@ mod tests {
             "-o",
             "/tmp/out.html",
         ]);
-        let result = check_curl(&cmd, &config).unwrap();
+        let result = check_curl(&cmd, &config, false).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 }

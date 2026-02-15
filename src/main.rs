@@ -471,6 +471,7 @@ fn check_single_command(
                     &cmd.name,
                     &cmd.args,
                     unwrap_result.host.as_deref(),
+                    edit_mode,
                 );
 
                 // Return the more restrictive of host check and inner command check
@@ -486,6 +487,7 @@ fn check_single_command(
                 &cmd.name,
                 &cmd.args,
                 unwrap_result.host.as_deref(),
+                edit_mode,
             );
         }
     }
@@ -521,12 +523,12 @@ fn check_single_command(
     // local cwd from allowing dangerous remote operations
     if !is_remote {
         // Try virtual_cwd first, then initial_cwd
-        let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd);
+        let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, edit_mode);
         if cwd_result.permission == Permission::Allow {
             return cwd_result;
         }
         if initial_cwd != virtual_cwd {
-            let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd);
+            let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode);
             if cwd_result.permission == Permission::Allow {
                 return cwd_result;
             }
@@ -590,7 +592,7 @@ fn check_single_command(
             return result;
         }
         // python3 script.py - check if the script path itself is allowed
-        if let Some(result) = scripts::check_interpreter_script(cmd, config, virtual_cwd, initial_cwd) {
+        if let Some(result) = scripts::check_interpreter_script(cmd, config, virtual_cwd, initial_cwd, edit_mode) {
             return result;
         }
     }
@@ -662,7 +664,7 @@ fn check_single_command(
 
     // Special handling for curl - allow localhost, check host rules for others
     if cmd.name == "curl" {
-        if let Some(result) = curl::check_curl(cmd, config) {
+        if let Some(result) = curl::check_curl(cmd, config, edit_mode) {
             return result;
         }
     }
@@ -709,7 +711,7 @@ fn check_single_command(
     // Try virtual_cwd first (from cd commands), then fall back to initial_cwd
     // This allows "cd /project && ./script" to match cwd-restricted rules
     if virtual_cwd.is_some() && virtual_cwd != initial_cwd {
-        let result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd);
+        let result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, edit_mode);
         // If virtual_cwd matched an allow rule, use it
         if result.permission == Permission::Allow {
             return result;
@@ -717,7 +719,7 @@ fn check_single_command(
     }
 
     // Fall back to initial_cwd
-    config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd)
+    config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode)
 }
 
 
