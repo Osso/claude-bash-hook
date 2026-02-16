@@ -65,6 +65,9 @@ pub fn analyze(cmd: &str) -> NushellAnalysisResult {
 /// Nushell builtins that are read-only and safe to allow
 /// Without stdlib loaded, the parser treats these as external commands
 const SAFE_NUSHELL_BUILTINS: &[&str] = &[
+    // Filesystem (read-only)
+    "glob",
+    "ls",
     // Data manipulation (read-only)
     "open",
     "get",
@@ -332,12 +335,11 @@ mod tests {
 
     #[test]
     fn test_pipeline_with_externals() {
-        // All external commands in pipeline are extracted
+        // All external commands in pipeline are extracted (ls is a safe builtin, filtered out)
         let result = analyze("ls | grep pattern");
         assert!(result.success);
-        assert_eq!(result.commands.len(), 2);
-        assert_eq!(result.commands[0].name, "ls");
-        assert_eq!(result.commands[1].name, "grep");
+        assert_eq!(result.commands.len(), 1);
+        assert_eq!(result.commands[0].name, "grep");
     }
 
     #[test]
