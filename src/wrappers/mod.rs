@@ -3,6 +3,7 @@
 //! Unwraps wrapper commands to analyze the inner command.
 //! Simple wrappers are config-driven, complex ones have special handling.
 
+mod bwrap;
 mod docker_exec;
 mod env;
 mod gcloud;
@@ -45,6 +46,7 @@ pub fn unwrap_command(cmd: &Command, config: &Config) -> Option<UnwrapResult> {
         "kitty-remote" | "wezterm-remote" => return terminal_remote::unwrap(cmd),
         "xargs" => return xargs::unwrap(cmd),
         "sh" | "bash" | "zsh" | "fish" | "nu" => return shell::unwrap(cmd),
+        "bwrap" => return bwrap::unwrap(cmd),
         _ => {}
     }
 
