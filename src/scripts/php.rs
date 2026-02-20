@@ -188,6 +188,10 @@ fn is_readonly_php(code: &str) -> bool {
             break;
         }
 
+        // Check if preceded by -> (method call) or "new " (constructor)
+        let is_method_call = i >= 2 && &code_lower[i - 2..i] == "->";
+        let is_constructor = i >= 4 && &code_lower[i - 4..i] == "new ";
+
         // Extract word
         let start = i;
         while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
@@ -202,7 +206,7 @@ fn is_readonly_php(code: &str) -> bool {
         }
 
         // Check if followed by ( - this is a function call
-        if i < bytes.len() && bytes[i] == b'(' {
+        if i < bytes.len() && bytes[i] == b'(' && !is_method_call && !is_constructor {
             // Check if this function is in our allowlist
             if !READONLY_FUNCTIONS
                 .iter()
@@ -220,6 +224,11 @@ fn is_readonly_php(code: &str) -> bool {
                         | "case"
                         | "array"
                         | "list"
+                        | "new"
+                        | "require"
+                        | "require_once"
+                        | "include"
+                        | "include_once"
                 ) {
                     return false;
                 }
@@ -334,5 +343,35 @@ mod tests {
         let cmd = make_cmd(&["script.php"]);
         let result = check_php_script(&cmd);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_require_autoload_allowed() {
+        let cmd = make_cmd(&[
+            "-r",
+            "require 'vendor/autoload.php'; echo get_class_methods('Foo');",
+        ]);
+        let result = check_php_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_new_reflection_allowed() {
+        let cmd = make_cmd(&[
+            "-r",
+            r#"require 'vendor/autoload.php'; $r = new ReflectionClass('Foo'); echo $r->getMethods()[0]->getReturnType();"#,
+        ]);
+        let result = check_php_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_method_call_allowed() {
+        let cmd = make_cmd(&[
+            "-r",
+            r#"$obj->dangerousFunction();"#,
+        ]);
+        let result = check_php_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 }
