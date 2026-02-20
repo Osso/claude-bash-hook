@@ -228,8 +228,10 @@ fn all_writes_allowed(paths: &[String], cwd: Option<&str>) -> bool {
     for path in paths {
         let is_tmp = path.starts_with("/tmp/") || path == "/tmp";
         let is_in_project = cwd.is_some_and(|c| path.starts_with(c));
+        // Relative paths resolve within cwd (the project directory)
+        let is_relative = !path.starts_with('/') && cwd.is_some();
 
-        if !is_tmp && !is_in_project {
+        if !is_tmp && !is_in_project && !is_relative {
             return false;
         }
     }
@@ -380,6 +382,34 @@ mod tests {
         );
         let result = check_python_script(&cmd, None, Some("/home/user/project")).unwrap();
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_write_relative_path_allowed() {
+        // Relative paths resolve within cwd, so they're allowed when cwd is set
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "open('phpstan-baseline.neon', 'w').write('data')",
+            ],
+        );
+        let result = check_python_script(&cmd, None, Some("/home/user/project")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_write_relative_path_no_cwd_asks() {
+        // Relative paths without cwd should ask
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "open('phpstan-baseline.neon', 'w').write('data')",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
