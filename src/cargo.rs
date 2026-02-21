@@ -14,6 +14,21 @@ pub fn check_target_binary(
         return None;
     }
 
+    // Resolve relative paths (./target/debug/foo) to absolute using cwd
+    let resolved_name = if cmd.name.starts_with("./") || !cmd.name.starts_with('/') {
+        if let Some(cwd) = virtual_cwd.or(initial_cwd) {
+            format!(
+                "{}/{}",
+                cwd.trim_end_matches('/'),
+                cmd.name.strip_prefix("./").unwrap_or(&cmd.name)
+            )
+        } else {
+            cmd.name.clone()
+        }
+    } else {
+        cmd.name.clone()
+    };
+
     let cwds = [virtual_cwd, initial_cwd];
     for cwd in cwds.into_iter().flatten() {
         let prefix = if cwd.ends_with('/') {
@@ -21,7 +36,7 @@ pub fn check_target_binary(
         } else {
             format!("{}/", cwd)
         };
-        if cmd.name.starts_with(&prefix) {
+        if resolved_name.starts_with(&prefix) {
             return Some(PermissionResult {
                 permission: Permission::Allow,
                 reason: "cargo target binary in project dir".to_string(),
@@ -34,7 +49,10 @@ pub fn check_target_binary(
 }
 
 fn is_cargo_target_binary(name: &str) -> bool {
-    name.contains("/target/debug/") || name.contains("/target/release/")
+    name.contains("/target/debug/")
+        || name.contains("/target/release/")
+        || name.starts_with("target/debug/")
+        || name.starts_with("target/release/")
 }
 
 #[cfg(test)]
@@ -86,5 +104,21 @@ mod tests {
         let cmd = make_cmd("/usr/bin/ls", &[]);
         let result = check_target_binary(&cmd, None, Some("/usr"));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_relative_target_binary_allowed() {
+        let cmd = make_cmd("./target/debug/myapp", &["test"]);
+        let result =
+            check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_relative_target_binary_no_dot_slash() {
+        let cmd = make_cmd("target/debug/myapp", &[]);
+        let result =
+            check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 }
