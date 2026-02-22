@@ -16,6 +16,7 @@ mod redis;
 mod rm;
 mod scripts;
 mod sql;
+mod subagent_tracker;
 mod tar;
 mod tee;
 mod tool_handlers;
@@ -29,7 +30,9 @@ use std::io::{self, Read};
 /// Input from Claude Code hook
 #[derive(Debug, Deserialize)]
 struct HookInput {
+    #[serde(default)]
     tool_name: String,
+    #[serde(default)]
     tool_input: ToolInput,
     /// Permission mode: "default", "plan", "acceptEdits", "bypassPermissions"
     #[serde(default)]
@@ -37,13 +40,15 @@ struct HookInput {
     /// Working directory where Claude Code session started
     #[serde(default)]
     cwd: Option<String>,
-    /// Path to the conversation transcript file
-    /// Subagents have "/subagents/" in their path
+    /// Session identifier
     #[serde(default)]
-    transcript_path: Option<String>,
+    session_id: Option<String>,
+    /// Hook event name: "PreToolUse", "SubagentStart", "SubagentStop", etc.
+    #[serde(default)]
+    hook_event_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ToolInput {
     command: Option<String>,
     cwd: Option<String>,
@@ -128,11 +133,30 @@ fn main() {
         }
     };
 
-    // Compute common context once
+    // Handle SubagentStart/SubagentStop for subagent tracking
+    if let Some(ref event) = hook_input.hook_event_name {
+        if let Some(ref session_id) = hook_input.session_id {
+            match event.as_str() {
+                "SubagentStart" => {
+                    subagent_tracker::increment(session_id);
+                    info!("SubagentStart session={}", session_id);
+                    return;
+                }
+                "SubagentStop" => {
+                    subagent_tracker::decrement(session_id);
+                    info!("SubagentStop session={}", session_id);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Detect subagent context via active subagent counter
     let is_subagent = hook_input
-        .transcript_path
+        .session_id
         .as_deref()
-        .is_some_and(|p| p.contains("/subagents/"));
+        .is_some_and(|sid| subagent_tracker::has_active_subagents(sid));
     let config = Config::load_or_default();
 
     // Handle non-bash tools (Write, Edit, regex-replace)
@@ -180,8 +204,8 @@ fn main() {
         } else {
             // Bash: let Claude Code handle it
             info!(
-                "decision=passthrough is_subagent={} transcript_path={:?} cwd={:?} command={:?} reason={:?}",
-                is_subagent, hook_input.transcript_path, hook_input.cwd, command, result.reason
+                "decision=passthrough is_subagent={} session={:?} cwd={:?} command={:?} reason={:?}",
+                is_subagent, hook_input.session_id, hook_input.cwd, command, result.reason
             );
             return;
         }
@@ -197,8 +221,8 @@ fn main() {
         Permission::Deny => "deny",
     };
     info!(
-        "decision={} is_subagent={} transcript_path={:?} cwd={:?} command={:?} reason={:?}",
-        decision_str, is_subagent, hook_input.transcript_path, hook_input.cwd, command, result.reason
+        "decision={} is_subagent={} session={:?} cwd={:?} command={:?} reason={:?}",
+        decision_str, is_subagent, hook_input.session_id, hook_input.cwd, command, result.reason
     );
 
     // Build reason, optionally with AI advice

@@ -6,7 +6,11 @@ use crate::{HookInput, check_write_path, edits_allowed, output_decision};
 /// Handle Write, Edit, and regex-replace tools.
 /// Returns true if the tool was handled (caller should return), false otherwise.
 pub fn handle_non_bash_tool(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
-    let is_main_thread_disabled = !is_subagent && config.main_thread_default.is_some();
+    let is_main_thread_disabled = !is_subagent
+        && matches!(
+            config.main_thread_default.as_deref(),
+            Some("deny") | Some("ask")
+        );
 
     if hook_input.tool_name == "Write" || hook_input.tool_name == "Edit" {
         if is_main_thread_disabled {

@@ -607,14 +607,20 @@ fn test_subagent_context_allows_unmatched_commands() {
 }
 
 #[test]
-fn test_is_subagent_from_transcript_path() {
-    // Verify the detection logic used in main()
-    let main_path = Some("/home/user/.claude/projects/abc/session-id.jsonl");
-    let subagent_path =
-        Some("/home/user/.claude/projects/abc/session-id/subagents/agent-xyz.jsonl");
-    let no_path: Option<&str> = None;
+fn test_is_subagent_from_counter() {
+    use crate::subagent_tracker;
 
-    assert!(!main_path.is_some_and(|p| p.contains("/subagents/")));
-    assert!(subagent_path.is_some_and(|p| p.contains("/subagents/")));
-    assert!(!no_path.is_some_and(|p| p.contains("/subagents/")));
+    let session = "test-is-subagent-detection";
+    let _ = std::fs::remove_file(format!("/tmp/claude/subagents/{}.count", session));
+
+    // No active subagents → main thread
+    assert!(!subagent_tracker::has_active_subagents(session));
+
+    // Active subagent → subagent context
+    subagent_tracker::increment(session);
+    assert!(subagent_tracker::has_active_subagents(session));
+
+    // Cleanup
+    subagent_tracker::decrement(session);
+    assert!(!subagent_tracker::has_active_subagents(session));
 }
