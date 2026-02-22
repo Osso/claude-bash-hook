@@ -1,7 +1,7 @@
 //! Curl command special handling - URL host extraction
 
 use crate::analyzer::Command;
-use crate::config::{Config, Permission, PermissionResult};
+use crate::config::{Config, ExecContext, Permission, PermissionResult};
 
 /// Extract host from a URL
 fn extract_host(url: &str) -> Option<String> {
@@ -139,7 +139,7 @@ fn extract_urls(args: &[String]) -> Vec<String> {
 
 /// Check a curl command and extract URL hosts
 /// Returns a permission result based on the URL host
-pub fn check_curl(cmd: &Command, config: &Config, edit_mode: bool) -> Option<PermissionResult> {
+pub fn check_curl(cmd: &Command, config: &Config, ctx: ExecContext) -> Option<PermissionResult> {
     if cmd.name != "curl" {
         return None;
     }
@@ -157,7 +157,7 @@ pub fn check_curl(cmd: &Command, config: &Config, edit_mode: bool) -> Option<Per
     // Check each host against config rules
     // Return the most restrictive result (or first non-passthrough)
     for host in &hosts {
-        let result = config.check_command_with_host("curl", &cmd.args, Some(host), edit_mode);
+        let result = config.check_command_with_host("curl", &cmd.args, Some(host), ctx);
         if result.permission != Permission::Passthrough {
             return Some(result);
         }
@@ -249,7 +249,7 @@ mod tests {
     fn test_curl_localhost_allowed() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["-s", "http://127.0.0.1:3000/debug"]);
-        let result = check_curl(&cmd, &config, false).unwrap();
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -261,7 +261,7 @@ mod tests {
             "Content-Type: application/json",
             "http://localhost:8080/api",
         ]);
-        let result = check_curl(&cmd, &config, false).unwrap();
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -269,7 +269,7 @@ mod tests {
     fn test_curl_allowed_host() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["https://gcdev.site/api"]);
-        let result = check_curl(&cmd, &config, false).unwrap();
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -277,7 +277,7 @@ mod tests {
     fn test_curl_external_asks() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["https://example.com/api"]);
-        let result = check_curl(&cmd, &config, false).unwrap();
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
 
@@ -293,7 +293,7 @@ mod tests {
         "#;
         let config: Config = toml::from_str(config_str).unwrap();
         let cmd = make_cmd(&["https://example.com/api"]);
-        let result = check_curl(&cmd, &config, false);
+        let result = check_curl(&cmd, &config, ExecContext::default());
         assert!(result.is_none());
     }
 
@@ -301,7 +301,7 @@ mod tests {
     fn test_curl_no_url() {
         let config = config_with_curl_rules();
         let cmd = make_cmd(&["--help"]);
-        let result = check_curl(&cmd, &config, false);
+        let result = check_curl(&cmd, &config, ExecContext::default());
         assert!(result.is_none());
     }
 
@@ -313,7 +313,7 @@ mod tests {
             args: vec!["http://localhost".to_string()],
             text: "wget http://localhost".to_string(),
         };
-        let result = check_curl(&cmd, &config, false);
+        let result = check_curl(&cmd, &config, ExecContext::default());
         assert!(result.is_none());
     }
 
@@ -328,7 +328,7 @@ mod tests {
             "-o",
             "/tmp/out.html",
         ]);
-        let result = check_curl(&cmd, &config, false).unwrap();
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 }

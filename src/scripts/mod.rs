@@ -2,11 +2,12 @@
 //!
 //! Each language has its own module that checks if inline scripts are read-only.
 
+pub mod lua;
 pub mod php;
 pub mod python;
 
 use crate::analyzer::Command;
-use crate::config::{Config, Permission, PermissionResult};
+use crate::config::{Config, ExecContext, Permission, PermissionResult};
 
 /// Check if an interpreter command (e.g. python3 script.py) runs a script
 /// that would be allowed by config rules on its own.
@@ -15,7 +16,7 @@ pub fn check_interpreter_script(
     config: &Config,
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
-    edit_mode: bool,
+    ctx: ExecContext,
 ) -> Option<PermissionResult> {
     // Skip module execution (-m) which is handled by config rules like "python3 -m json.tool"
     if cmd.args.iter().any(|a| a == "-m") {
@@ -26,12 +27,12 @@ pub fn check_interpreter_script(
     let script = cmd.args.iter().find(|a| !a.starts_with('-'))?;
 
     // Check if the script path is allowed as a command
-    let result = config.check_command_with_cwd(script, &[], virtual_cwd, edit_mode);
+    let result = config.check_command_with_cwd(script, &[], virtual_cwd, ctx);
     if result.permission == Permission::Allow {
         return Some(result);
     }
     if initial_cwd != virtual_cwd {
-        let result = config.check_command_with_cwd(script, &[], initial_cwd, edit_mode);
+        let result = config.check_command_with_cwd(script, &[], initial_cwd, ctx);
         if result.permission == Permission::Allow {
             return Some(result);
         }
@@ -68,7 +69,8 @@ mod tests {
     fn test_python3_allowed_script() {
         let config = config_with_script("scripts/compare_refs.py");
         let cmd = make_cmd("python3", &["scripts/compare_refs.py", "arg1"]);
-        let result = check_interpreter_script(&cmd, &config, None, None, false).unwrap();
+        let result =
+            check_interpreter_script(&cmd, &config, None, None, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -76,7 +78,7 @@ mod tests {
     fn test_python3_unknown_script_returns_none() {
         let config = config_with_script("scripts/compare_refs.py");
         let cmd = make_cmd("python3", &["scripts/other.py"]);
-        let result = check_interpreter_script(&cmd, &config, None, None, false);
+        let result = check_interpreter_script(&cmd, &config, None, None, ExecContext::default());
         assert!(result.is_none());
     }
 
@@ -84,7 +86,7 @@ mod tests {
     fn test_python3_dash_m_skipped() {
         let config = config_with_script("json.tool");
         let cmd = make_cmd("python3", &["-m", "json.tool"]);
-        let result = check_interpreter_script(&cmd, &config, None, None, false);
+        let result = check_interpreter_script(&cmd, &config, None, None, ExecContext::default());
         assert!(result.is_none());
     }
 
@@ -93,7 +95,7 @@ mod tests {
         let config = config_with_script("scripts/foo.py");
         let cmd = make_cmd("python3", &["-c", "print('hi')"]);
         // -c's argument "print('hi')" won't match any script rule
-        let result = check_interpreter_script(&cmd, &config, None, None, false);
+        let result = check_interpreter_script(&cmd, &config, None, None, ExecContext::default());
         assert!(result.is_none());
     }
 
@@ -108,9 +110,14 @@ mod tests {
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         let cmd = make_cmd("python3", &["scripts/compare_refs.py"]);
-        let result =
-            check_interpreter_script(&cmd, &config, None, Some("/home/user/project"), false)
-                .unwrap();
+        let result = check_interpreter_script(
+            &cmd,
+            &config,
+            None,
+            Some("/home/user/project"),
+            ExecContext::default(),
+        )
+        .unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 }

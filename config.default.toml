@@ -6,11 +6,19 @@
 # "passthrough" lets Claude Code's built-in permission system handle it
 default = "passthrough"
 
+# Default permission for subagent (Task() call) commands when no rule matches
+# Uncomment to auto-allow subagent commands that don't match any rule:
+# subagent_default = "allow"
+
 # Enable AI-powered advice for permission decisions (uses claude-safe CLI)
 enable_advice = false
 
 # Rules are checked in order - first match wins
 # More specific rules should come before general ones
+#
+# Per-rule overrides:
+#   edit_mode_permission = "allow"    # override when in acceptEdits/bypassPermissions mode
+#   subagent_permission = "allow"     # override for subagent (Task() call) commands
 
 # Read-only commands - always allow
 [[rules]]

@@ -33,12 +33,25 @@ pub struct PermissionResult {
     pub suggestion: Option<String>,
 }
 
+/// Execution context passed through all analysis functions
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExecContext {
+    /// Whether the session is in edit mode (acceptEdits/bypassPermissions)
+    pub edit_mode: bool,
+    /// Whether the command comes from a subagent (Task() call)
+    pub is_subagent: bool,
+}
+
 /// Main configuration structure
 #[derive(Debug, Deserialize)]
 pub struct Config {
     /// Default permission for unmatched commands
     #[serde(default = "default_permission")]
     pub default: String,
+
+    /// Default permission for subagent commands when no rule matches (optional)
+    #[serde(default)]
+    pub subagent_default: Option<String>,
 
     /// Enable AI-powered advice for permission decisions
     #[serde(default)]
@@ -86,6 +99,10 @@ pub struct Rule {
     #[serde(default)]
     pub edit_mode_permission: Option<String>,
 
+    /// Override permission for subagent commands (Task() calls)
+    #[serde(default)]
+    pub subagent_permission: Option<String>,
+
     /// Reason for this rule
     #[serde(default)]
     pub reason: String,
@@ -104,12 +121,18 @@ pub struct Rule {
 }
 
 impl Rule {
-    /// Get the effective permission string, considering edit mode
-    pub fn effective_permission(&self, edit_mode: bool) -> &str {
-        if edit_mode {
-            if let Some(ref p) = self.edit_mode_permission {
-                return p;
-            }
+    /// Get the effective permission string, considering execution context
+    /// Priority: subagent_permission > edit_mode_permission > permission
+    pub fn effective_permission(&self, ctx: ExecContext) -> &str {
+        if ctx.is_subagent
+            && let Some(ref p) = self.subagent_permission
+        {
+            return p;
+        }
+        if ctx.edit_mode
+            && let Some(ref p) = self.edit_mode_permission
+        {
+            return p;
         }
         &self.permission
     }

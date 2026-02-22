@@ -1,4 +1,4 @@
-use crate::config::{Config, Permission};
+use crate::config::{Config, ExecContext, Permission};
 use crate::{analyze_command, check_write_path};
 use std::path::Path;
 
@@ -9,28 +9,28 @@ fn test_config() -> Config {
 #[test]
 fn test_simple_allow() {
     let config = test_config();
-    let result = analyze_command("ls -la", &config, false, None);
+    let result = analyze_command("ls -la", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
 }
 
 #[test]
 fn test_pipeline() {
     let config = test_config();
-    let result = analyze_command("ls | grep foo", &config, false, None);
+    let result = analyze_command("ls | grep foo", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
 }
 
 #[test]
 fn test_dangerous_command() {
     let config = test_config();
-    let result = analyze_command("rm -rf /", &config, false, None);
+    let result = analyze_command("rm -rf /", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Passthrough);
 }
 
 #[test]
 fn test_sudo_wrapper() {
     let config = test_config();
-    let result = analyze_command("sudo ls", &config, false, None);
+    let result = analyze_command("sudo ls", &config, ExecContext::default(), None);
     // sudo unwraps to ls, which is allowed
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -39,17 +39,22 @@ fn test_sudo_wrapper() {
 fn test_stdbuf_wrapper() {
     let config = test_config();
     // stdbuf unwraps to ls, which is allowed
-    let result = analyze_command("stdbuf -oL ls -la", &config, false, None);
+    let result = analyze_command("stdbuf -oL ls -la", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
     // stdbuf wrapping a denied command
-    let result = analyze_command("stdbuf -oL sed -i 's/a/b/' file.txt", &config, false, None);
+    let result = analyze_command(
+        "stdbuf -oL sed -i 's/a/b/' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Deny);
 }
 
 #[test]
 fn test_sudo_dangerous() {
     let config = test_config();
-    let result = analyze_command("sudo rm -rf /", &config, false, None);
+    let result = analyze_command("sudo rm -rf /", &config, ExecContext::default(), None);
     // sudo unwraps to rm -rf /, which passes through
     assert_eq!(result.permission, Permission::Passthrough);
 }
@@ -57,7 +62,7 @@ fn test_sudo_dangerous() {
 #[test]
 fn test_chain_with_dangerous() {
     let config = test_config();
-    let result = analyze_command("ls && rm -rf /tmp", &config, false, None);
+    let result = analyze_command("ls && rm -rf /tmp", &config, ExecContext::default(), None);
     // Most restrictive should be passthrough
     assert_eq!(result.permission, Permission::Passthrough);
 }
@@ -65,7 +70,7 @@ fn test_chain_with_dangerous() {
 #[test]
 fn test_env_dangerous() {
     let config = test_config();
-    let result = analyze_command("env VAR=1 rm -rf /", &config, false, None);
+    let result = analyze_command("env VAR=1 rm -rf /", &config, ExecContext::default(), None);
     // env unwraps to rm -rf /, which passes through
     assert_eq!(result.permission, Permission::Passthrough);
 }
@@ -73,7 +78,7 @@ fn test_env_dangerous() {
 #[test]
 fn test_var_assignment_safe() {
     let config = test_config();
-    let result = analyze_command("VAR=1 ls -la", &config, false, None);
+    let result = analyze_command("VAR=1 ls -la", &config, ExecContext::default(), None);
     // ls is allowed even with env var
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -81,7 +86,7 @@ fn test_var_assignment_safe() {
 #[test]
 fn test_git_suggestion() {
     let config = test_config();
-    let result = analyze_command("git checkout main", &config, false, None);
+    let result = analyze_command("git checkout main", &config, ExecContext::default(), None);
     // Should have a suggestion
     assert!(result.suggestion.is_some());
 }
@@ -89,7 +94,12 @@ fn test_git_suggestion() {
 #[test]
 fn test_kubectl_exec_safe() {
     let config = test_config();
-    let result = analyze_command("kubectl exec mypod -- ls -la", &config, false, None);
+    let result = analyze_command(
+        "kubectl exec mypod -- ls -la",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     // kubectl exec unwraps to ls -la, which is allowed
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -100,7 +110,7 @@ fn test_kubectl_exec_dangerous() {
     let result = analyze_command(
         "kubectl exec -n prod mypod -- rm -rf /",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     // kubectl exec unwraps to rm -rf /, which passes through
@@ -114,7 +124,7 @@ fn test_kubectl_namespace_before_exec_env() {
     let result = analyze_command(
         "kubectl -n external2-env exec deploy/api -- env 2>/dev/null | grep -i openai",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     // kubectl exec unwraps to env, which is allowed; grep is also allowed
@@ -124,7 +134,7 @@ fn test_kubectl_namespace_before_exec_env() {
 #[test]
 fn test_kubectl_get_allowed() {
     let config = test_config();
-    let result = analyze_command("kubectl get pods", &config, false, None);
+    let result = analyze_command("kubectl get pods", &config, ExecContext::default(), None);
     // kubectl get is allowed (not a wrapper, falls through to default)
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -132,21 +142,36 @@ fn test_kubectl_get_allowed() {
 #[test]
 fn test_sed_inline_allowed() {
     let config = test_config();
-    let result = analyze_command("echo test | sed 's/t/x/'", &config, false, None);
+    let result = analyze_command(
+        "echo test | sed 's/t/x/'",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
 #[test]
 fn test_sed_n_inline_allowed() {
     let config = test_config();
-    let result = analyze_command("sed -n '5p' file.txt", &config, false, None);
+    let result = analyze_command(
+        "sed -n '5p' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
 #[test]
 fn test_sed_i_denied() {
     let config = test_config();
-    let result = analyze_command("sed -i 's/foo/bar/' file.txt", &config, false, None);
+    let result = analyze_command(
+        "sed -i 's/foo/bar/' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Deny);
 }
 
@@ -154,14 +179,24 @@ fn test_sed_i_denied() {
 fn test_sed_i_suffix_denied() {
     let config = test_config();
     // sed -i.bak is also in-place
-    let result = analyze_command("sed -i.bak 's/foo/bar/' file.txt", &config, false, None);
+    let result = analyze_command(
+        "sed -i.bak 's/foo/bar/' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Deny);
 }
 
 #[test]
 fn test_awk_inline_allowed() {
     let config = test_config();
-    let result = analyze_command("awk '{print $1}' file.txt", &config, false, None);
+    let result = analyze_command(
+        "awk '{print $1}' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -169,14 +204,24 @@ fn test_awk_inline_allowed() {
 fn test_perl_inline_allowed() {
     let config = test_config();
     // perl -pe without -i is just a pipeline filter
-    let result = analyze_command("echo test | perl -pe 's/foo/bar/'", &config, false, None);
+    let result = analyze_command(
+        "echo test | perl -pe 's/foo/bar/'",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
 #[test]
 fn test_perl_i_denied() {
     let config = test_config();
-    let result = analyze_command("perl -i -pe 's/foo/bar/' file.txt", &config, false, None);
+    let result = analyze_command(
+        "perl -i -pe 's/foo/bar/' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Deny);
 }
 
@@ -184,7 +229,12 @@ fn test_perl_i_denied() {
 fn test_perl_pi_denied() {
     let config = test_config();
     // -pi combines -p and -i flags
-    let result = analyze_command("perl -pi -e 's/foo/bar/' file.txt", &config, false, None);
+    let result = analyze_command(
+        "perl -pi -e 's/foo/bar/' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Deny);
 }
 
@@ -192,7 +242,12 @@ fn test_perl_pi_denied() {
 fn test_perl_pie_denied() {
     let config = test_config();
     // -pie combines -p, -i, -e flags
-    let result = analyze_command("perl -pie 's/foo/bar/' file.txt", &config, false, None);
+    let result = analyze_command(
+        "perl -pie 's/foo/bar/' file.txt",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Deny);
 }
 
@@ -200,13 +255,13 @@ fn test_perl_pie_denied() {
 fn test_help_always_allowed() {
     let config = test_config();
     // --help flag
-    let result = analyze_command("someunknown --help", &config, false, None);
+    let result = analyze_command("someunknown --help", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
     // -h flag
-    let result = analyze_command("kubectl delete -h", &config, false, None);
+    let result = analyze_command("kubectl delete -h", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
     // help subcommand
-    let result = analyze_command("cargo help build", &config, false, None);
+    let result = analyze_command("cargo help build", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -214,13 +269,18 @@ fn test_help_always_allowed() {
 fn test_version_always_allowed() {
     let config = test_config();
     // --version flag
-    let result = analyze_command("someunknown --version", &config, false, None);
+    let result = analyze_command(
+        "someunknown --version",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
     // -V flag
-    let result = analyze_command("rustc -V", &config, false, None);
+    let result = analyze_command("rustc -V", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
     // version subcommand
-    let result = analyze_command("docker version", &config, false, None);
+    let result = analyze_command("docker version", &config, ExecContext::default(), None);
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -247,14 +307,19 @@ fn test_cwd_propagates_through_wrapper() {
     let config: Config = toml::from_str(config_str).unwrap();
 
     // Without cd, should passthrough (no cwd match)
-    let result = analyze_command("sudo ./target/release/myapp", &config, false, None);
+    let result = analyze_command(
+        "sudo ./target/release/myapp",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Passthrough);
 
     // With cd before sudo, should allow (cwd propagates through wrapper)
     let result = analyze_command(
         "cd /home/test/myproject && sudo ./target/release/myapp",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
@@ -307,7 +372,12 @@ fn test_write_project_allowed() {
 fn test_cd_tmp_claude_then_rm_allowed() {
     // From cwd /, "cd /tmp/claude && rm test" should be allowed
     let config = test_config();
-    let result = analyze_command("cd /tmp/claude && rm test", &config, false, Some("/"));
+    let result = analyze_command(
+        "cd /tmp/claude && rm test",
+        &config,
+        ExecContext::default(),
+        Some("/"),
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -315,7 +385,12 @@ fn test_cd_tmp_claude_then_rm_allowed() {
 fn test_cd_root_then_rm_not_allowed() {
     // From cwd /tmp/claude, "cd / && rm test" should NOT be allowed
     let config = test_config();
-    let result = analyze_command("cd / && rm test", &config, false, Some("/tmp/claude"));
+    let result = analyze_command(
+        "cd / && rm test",
+        &config,
+        ExecContext::default(),
+        Some("/tmp/claude"),
+    );
     // Should passthrough (not allowed) because /test is not under /tmp/ or project
     assert_eq!(result.permission, Permission::Passthrough);
 }
@@ -324,7 +399,12 @@ fn test_cd_root_then_rm_not_allowed() {
 fn test_rm_absolute_path_ignores_cd() {
     // From cwd /, "cd / && rm /tmp/test" should be allowed (absolute path)
     let config = test_config();
-    let result = analyze_command("cd / && rm /tmp/test", &config, false, Some("/"));
+    let result = analyze_command(
+        "cd / && rm /tmp/test",
+        &config,
+        ExecContext::default(),
+        Some("/"),
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -333,7 +413,12 @@ fn test_rm_absolute_path_ignores_cd() {
 #[test]
 fn test_piped_select_allowed() {
     let config = test_config();
-    let result = analyze_command("echo 'SELECT * FROM users' | mysql", &config, false, None);
+    let result = analyze_command(
+        "echo 'SELECT * FROM users' | mysql",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -343,7 +428,7 @@ fn test_piped_insert_asks() {
     let result = analyze_command(
         "echo 'INSERT INTO users VALUES (1)' | mysql",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Ask);
@@ -352,7 +437,12 @@ fn test_piped_insert_asks() {
 #[test]
 fn test_piped_show_allowed() {
     let config = test_config();
-    let result = analyze_command("echo 'SHOW DATABASES' | mariadb", &config, false, None);
+    let result = analyze_command(
+        "echo 'SHOW DATABASES' | mariadb",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -363,7 +453,7 @@ fn test_piped_through_ssh_select_allowed() {
     let result = analyze_command(
         "echo 'SELECT 1' | ssh host 'mariadb -u user db'",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
@@ -376,7 +466,7 @@ fn test_piped_through_docker_exec_select_allowed() {
     let result = analyze_command(
         "echo 'SELECT 1' | docker exec -i container mariadb",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
@@ -389,7 +479,7 @@ fn test_piped_through_ssh_docker_select_allowed() {
     let result = analyze_command(
         "echo 'SELECT 1' | ssh host 'docker exec -i container mariadb'",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
@@ -402,7 +492,7 @@ fn test_piped_through_ssh_insert_asks() {
     let result = analyze_command(
         "echo 'INSERT INTO t VALUES (1)' | ssh host 'mariadb db'",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Ask);
@@ -417,7 +507,7 @@ fn test_nu_c_builtin_allowed() {
     let result = analyze_command(
         "nu -c 'open /tmp/claude/test.json | get items | to json'",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
@@ -427,7 +517,7 @@ fn test_nu_c_builtin_allowed() {
 fn test_nu_c_external_command() {
     let config = test_config();
     // nu -c with external command should check against rules
-    let result = analyze_command("nu -c 'ls -la'", &config, false, None);
+    let result = analyze_command("nu -c 'ls -la'", &config, ExecContext::default(), None);
     // ls is allowed by config
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -436,7 +526,12 @@ fn test_nu_c_external_command() {
 fn test_nu_c_dangerous_builtin() {
     let config = test_config();
     // nu -c with rm should check against rules
-    let result = analyze_command("nu -c 'rm ~/Documents/important.txt'", &config, false, None);
+    let result = analyze_command(
+        "nu -c 'rm ~/Documents/important.txt'",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     // rm outside /tmp is dangerous
     assert_eq!(result.permission, Permission::Passthrough);
 }
@@ -446,7 +541,12 @@ fn test_nu_c_dangerous_builtin() {
 #[test]
 fn test_docker_compose_exec_local_allowed() {
     let config = test_config();
-    let result = analyze_command("docker compose exec web bash", &config, false, None);
+    let result = analyze_command(
+        "docker compose exec web bash",
+        &config,
+        ExecContext::default(),
+        None,
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -458,7 +558,7 @@ fn test_docker_compose_exec_through_ssh() {
     let result = analyze_command(
         "ssh host 'docker compose exec web bash'",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Passthrough);
@@ -471,8 +571,50 @@ fn test_docker_compose_exec_through_ssh_safe_inner() {
     let result = analyze_command(
         "ssh host 'docker compose exec web ls -la'",
         &config,
-        false,
+        ExecContext::default(),
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_subagent_context_allows_unmatched_commands() {
+    let toml = r#"
+        default = "ask"
+        subagent_default = "allow"
+        [[rules]]
+        commands = ["ls"]
+        permission = "allow"
+        reason = "read-only"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+
+    // Main thread: unknown command uses default (ask)
+    let result = analyze_command("some_tool --flag", &config, ExecContext::default(), None);
+    assert_eq!(result.permission, Permission::Ask);
+
+    // Subagent: unknown command uses subagent_default (allow)
+    let result = analyze_command(
+        "some_tool --flag",
+        &config,
+        ExecContext {
+            is_subagent: true,
+            ..Default::default()
+        },
+        None,
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_is_subagent_from_transcript_path() {
+    // Verify the detection logic used in main()
+    let main_path = Some("/home/user/.claude/projects/abc/session-id.jsonl");
+    let subagent_path =
+        Some("/home/user/.claude/projects/abc/session-id/subagents/agent-xyz.jsonl");
+    let no_path: Option<&str> = None;
+
+    assert!(!main_path.is_some_and(|p| p.contains("/subagents/")));
+    assert!(subagent_path.is_some_and(|p| p.contains("/subagents/")));
+    assert!(!no_path.is_some_and(|p| p.contains("/subagents/")));
 }

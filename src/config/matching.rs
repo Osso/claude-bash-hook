@@ -2,7 +2,7 @@
 
 use glob_match::glob_match;
 
-use super::{Config, Permission, PermissionResult};
+use super::{Config, ExecContext, Permission, PermissionResult};
 
 impl Config {
     /// Check a command against rules with an optional cwd override
@@ -11,7 +11,7 @@ impl Config {
         name: &str,
         args: &[String],
         cwd: Option<&str>,
-        edit_mode: bool,
+        ctx: ExecContext,
     ) -> PermissionResult {
         // First check for suggestions
         let suggestion = self.find_suggestion(name, args);
@@ -19,15 +19,26 @@ impl Config {
         // Then match against rules
         for rule in &self.rules {
             if let Some(result) =
-                self.match_rule_with_cwd(rule, name, args, cwd, suggestion.clone(), edit_mode)
+                self.match_rule_with_cwd(rule, name, args, cwd, suggestion.clone(), ctx)
             {
                 return result;
             }
         }
 
+        // For subagents, use subagent_default if set
+        let default_perm = if ctx.is_subagent {
+            if let Some(ref sd) = self.subagent_default {
+                sd.as_str()
+            } else {
+                &self.default
+            }
+        } else {
+            &self.default
+        };
+
         // Return default
         PermissionResult {
-            permission: self.parse_permission(&self.default),
+            permission: self.parse_permission(default_perm),
             reason: "No matching rule".to_string(),
             suggestion,
         }
@@ -39,20 +50,30 @@ impl Config {
         name: &str,
         args: &[String],
         host: Option<&str>,
-        edit_mode: bool,
+        ctx: ExecContext,
     ) -> PermissionResult {
         let suggestion = self.find_suggestion(name, args);
 
         for rule in &self.rules {
             if let Some(result) =
-                self.match_rule_with_host(rule, name, args, host, suggestion.clone(), edit_mode)
+                self.match_rule_with_host(rule, name, args, host, suggestion.clone(), ctx)
             {
                 return result;
             }
         }
 
+        let default_perm = if ctx.is_subagent {
+            if let Some(ref sd) = self.subagent_default {
+                sd.as_str()
+            } else {
+                &self.default
+            }
+        } else {
+            &self.default
+        };
+
         PermissionResult {
-            permission: self.parse_permission(&self.default),
+            permission: self.parse_permission(default_perm),
             reason: "No matching rule".to_string(),
             suggestion,
         }
@@ -66,9 +87,9 @@ impl Config {
         args: &[String],
         cwd: Option<&str>,
         suggestion: Option<String>,
-        edit_mode: bool,
+        ctx: ExecContext,
     ) -> Option<PermissionResult> {
-        let effective_perm = rule.effective_permission(edit_mode);
+        let effective_perm = rule.effective_permission(ctx);
 
         for pattern in &rule.commands {
             // If rule has cwd constraint, do path-resolved matching
@@ -253,7 +274,7 @@ impl Config {
         args: &[String],
         host: Option<&str>,
         suggestion: Option<String>,
-        edit_mode: bool,
+        ctx: ExecContext,
     ) -> Option<PermissionResult> {
         for pattern in &rule.commands {
             if self.matches_pattern(pattern, name, args, &rule.opts_with_args) {
@@ -264,7 +285,7 @@ impl Config {
                     }
                 }
 
-                let effective_perm = rule.effective_permission(edit_mode);
+                let effective_perm = rule.effective_permission(ctx);
 
                 // Check if this is a host-checking rule
                 if effective_perm == "check_host" {

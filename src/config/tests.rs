@@ -8,7 +8,7 @@ trait ConfigTestExt {
 
 impl ConfigTestExt for Config {
     fn check_command(&self, name: &str, args: &[String]) -> PermissionResult {
-        self.check_command_with_cwd(name, args, None, false)
+        self.check_command_with_cwd(name, args, None, ExecContext::default())
     }
 }
 
@@ -168,7 +168,7 @@ fn test_absolute_path_matches_relative_pattern_with_cwd() {
         "/home/user/project/target/release/myapp",
         &[],
         Some("/home/user/project"),
-        false,
+        ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Allow);
 
@@ -177,7 +177,7 @@ fn test_absolute_path_matches_relative_pattern_with_cwd() {
         "/home/user/project/target/release/myapp",
         &[],
         Some("/home/other/project"),
-        false,
+        ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Ask);
 }
@@ -195,23 +195,40 @@ fn test_cwd_matches_subdirectories() {
     let config: Config = toml::from_str(toml).unwrap();
 
     // Exact cwd match - run-tests.sh at /home/user/project/run-tests.sh
-    let result =
-        config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user/project"), false);
+    let result = config.check_command_with_cwd(
+        "run-tests.sh",
+        &[],
+        Some("/home/user/project"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Subdirectory matches for bare commands (no path separator in pattern or command)
     // Bare commands are on PATH, cwd only restricts which project tree can use them
-    let result =
-        config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user/project/src"), false);
+    let result = config.check_command_with_cwd(
+        "run-tests.sh",
+        &[],
+        Some("/home/user/project/src"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Should NOT match sibling directory
-    let result =
-        config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user/project2"), false);
+    let result = config.check_command_with_cwd(
+        "run-tests.sh",
+        &[],
+        Some("/home/user/project2"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
 
     // Should NOT match parent directory
-    let result = config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user"), false);
+    let result = config.check_command_with_cwd(
+        "run-tests.sh",
+        &[],
+        Some("/home/user"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
 }
 
@@ -228,13 +245,21 @@ fn test_cwd_with_glob_suffix() {
     let config: Config = toml::from_str(toml).unwrap();
 
     // Exact match (without the /**)
-    let result =
-        config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user/project"), false);
+    let result = config.check_command_with_cwd(
+        "run-tests.sh",
+        &[],
+        Some("/home/user/project"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Subdirectory matches for bare commands (no path separator)
-    let result =
-        config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user/project/src"), false);
+    let result = config.check_command_with_cwd(
+        "run-tests.sh",
+        &[],
+        Some("/home/user/project/src"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -251,29 +276,50 @@ fn test_cwd_path_resolution() {
     let config: Config = toml::from_str(toml).unwrap();
 
     // Case 1: exact cwd, exact cmd -> allow
-    let result =
-        config.check_command_with_cwd("bin/custom-cli", &[], Some("/home/user/project"), false);
+    let result = config.check_command_with_cwd(
+        "bin/custom-cli",
+        &[],
+        Some("/home/user/project"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Case 2: exact cwd, ./bin/custom-cli -> allow (normalized)
-    let result =
-        config.check_command_with_cwd("./bin/custom-cli", &[], Some("/home/user/project"), false);
+    let result = config.check_command_with_cwd(
+        "./bin/custom-cli",
+        &[],
+        Some("/home/user/project"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Case 3: cwd is subdirectory (bin), cmd is ./custom-cli
     // Resolves to /home/user/project/bin/custom-cli == /home/user/project/bin/custom-cli -> allow
-    let result =
-        config.check_command_with_cwd("./custom-cli", &[], Some("/home/user/project/bin"), false);
+    let result = config.check_command_with_cwd(
+        "./custom-cli",
+        &[],
+        Some("/home/user/project/bin"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Case 4: exact cwd, cmd is ./custom-cli (wrong path)
     // Resolves to /home/user/project/custom-cli != /home/user/project/bin/custom-cli -> no match
-    let result =
-        config.check_command_with_cwd("./custom-cli", &[], Some("/home/user/project"), false);
+    let result = config.check_command_with_cwd(
+        "./custom-cli",
+        &[],
+        Some("/home/user/project"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
 
     // Case 5: parent cwd (not under rule_cwd) -> no match
-    let result = config.check_command_with_cwd("bin/custom-cli", &[], Some("/home/user"), false);
+    let result = config.check_command_with_cwd(
+        "bin/custom-cli",
+        &[],
+        Some("/home/user"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
 
     // Case 6: cwd is /project/other, cmd is bin/custom-cli
@@ -282,7 +328,7 @@ fn test_cwd_path_resolution() {
         "bin/custom-cli",
         &[],
         Some("/home/user/project/other"),
-        false,
+        ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Ask);
 }
@@ -302,8 +348,12 @@ fn test_cwd_bare_command_matches_subdirectories() {
     let config: Config = toml::from_str(toml).unwrap();
 
     // Exact cwd match
-    let result =
-        config.check_command_with_cwd("browser-cli", &[], Some("/home/user/project"), false);
+    let result = config.check_command_with_cwd(
+        "browser-cli",
+        &[],
+        Some("/home/user/project"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Allow);
 
     // Subdirectory should also match (browser-cli is on PATH, not a local script)
@@ -311,16 +361,26 @@ fn test_cwd_bare_command_matches_subdirectories() {
         "browser-cli",
         &[],
         Some("/home/user/project/frontend"),
-        false,
+        ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Allow);
 
     // Parent directory should NOT match
-    let result = config.check_command_with_cwd("browser-cli", &[], Some("/home/user"), false);
+    let result = config.check_command_with_cwd(
+        "browser-cli",
+        &[],
+        Some("/home/user"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
 
     // Sibling directory should NOT match
-    let result = config.check_command_with_cwd("browser-cli", &[], Some("/home/user/other"), false);
+    let result = config.check_command_with_cwd(
+        "browser-cli",
+        &[],
+        Some("/home/user/other"),
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
 
     // With subcommands
@@ -328,7 +388,7 @@ fn test_cwd_bare_command_matches_subdirectories() {
         "browser-cli",
         &["eval".into(), "document.title".into()],
         Some("/home/user/project/frontend"),
-        false,
+        ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -398,7 +458,7 @@ fn test_edit_mode_permission() {
             "output.png".into(),
         ],
         None,
-        false,
+        ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Ask);
 
@@ -412,7 +472,10 @@ fn test_edit_mode_permission() {
             "output.png".into(),
         ],
         None,
-        true,
+        ExecContext {
+            edit_mode: true,
+            ..Default::default()
+        },
     );
     assert_eq!(result.permission, Permission::Allow);
 }
@@ -429,10 +492,18 @@ fn test_edit_mode_permission_not_set() {
     "#;
     let config: Config = toml::from_str(toml).unwrap();
 
-    let result = config.check_command_with_cwd("somecmd", &[], None, false);
+    let result = config.check_command_with_cwd("somecmd", &[], None, ExecContext::default());
     assert_eq!(result.permission, Permission::Ask);
 
-    let result = config.check_command_with_cwd("somecmd", &[], None, true);
+    let result = config.check_command_with_cwd(
+        "somecmd",
+        &[],
+        None,
+        ExecContext {
+            edit_mode: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(result.permission, Permission::Ask);
 }
 
@@ -452,4 +523,130 @@ fn test_git_worktree_with_c_flag() {
         ],
     );
     assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_subagent_permission_overrides_base() {
+    let toml = r#"
+        default = "ask"
+        [[rules]]
+        commands = ["docker run"]
+        permission = "ask"
+        subagent_permission = "allow"
+        reason = "docker run"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+
+    // Without subagent - ask
+    let result =
+        config.check_command_with_cwd("docker", &["run".into()], None, ExecContext::default());
+    assert_eq!(result.permission, Permission::Ask);
+
+    // With subagent - allow
+    let result = config.check_command_with_cwd(
+        "docker",
+        &["run".into()],
+        None,
+        ExecContext {
+            is_subagent: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_subagent_permission_priority_over_edit_mode() {
+    // subagent_permission takes priority over edit_mode_permission
+    let toml = r#"
+        default = "ask"
+        [[rules]]
+        commands = ["mycmd"]
+        permission = "deny"
+        edit_mode_permission = "ask"
+        subagent_permission = "allow"
+        reason = "test priority"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+
+    // Subagent + edit mode: subagent_permission wins
+    let result = config.check_command_with_cwd(
+        "mycmd",
+        &[],
+        None,
+        ExecContext {
+            edit_mode: true,
+            is_subagent: true,
+        },
+    );
+    assert_eq!(result.permission, Permission::Allow);
+
+    // Edit mode only: edit_mode_permission applies
+    let result = config.check_command_with_cwd(
+        "mycmd",
+        &[],
+        None,
+        ExecContext {
+            edit_mode: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result.permission, Permission::Ask);
+
+    // Neither: base permission
+    let result = config.check_command_with_cwd("mycmd", &[], None, ExecContext::default());
+    assert_eq!(result.permission, Permission::Deny);
+}
+
+#[test]
+fn test_subagent_default_applies_when_no_rule_matches() {
+    let toml = r#"
+        default = "ask"
+        subagent_default = "allow"
+        [[rules]]
+        commands = ["ls"]
+        permission = "allow"
+        reason = "read-only"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+
+    // Unknown command, not subagent: uses default (ask)
+    let result = config.check_command_with_cwd("unknown_cmd", &[], None, ExecContext::default());
+    assert_eq!(result.permission, Permission::Ask);
+
+    // Unknown command, subagent: uses subagent_default (allow)
+    let result = config.check_command_with_cwd(
+        "unknown_cmd",
+        &[],
+        None,
+        ExecContext {
+            is_subagent: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_subagent_default_not_set_falls_back() {
+    let toml = r#"
+        default = "passthrough"
+        [[rules]]
+        commands = ["ls"]
+        permission = "allow"
+        reason = "read-only"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+
+    // Subagent without subagent_default: uses regular default
+    let result = config.check_command_with_cwd(
+        "unknown_cmd",
+        &[],
+        None,
+        ExecContext {
+            is_subagent: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result.permission, Permission::Passthrough);
 }

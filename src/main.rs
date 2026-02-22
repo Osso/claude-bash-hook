@@ -20,7 +20,7 @@ mod tar;
 mod tee;
 mod wrappers;
 
-use config::{Config, Permission, PermissionResult};
+use config::{Config, ExecContext, Permission, PermissionResult};
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
@@ -36,6 +36,10 @@ struct HookInput {
     /// Working directory where Claude Code session started
     #[serde(default)]
     cwd: Option<String>,
+    /// Path to the conversation transcript file
+    /// Subagents have "/subagents/" in their path
+    #[serde(default)]
+    transcript_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,11 +140,17 @@ fn main() {
     // Handle regex-replace MCP tool
     if hook_input.tool_name == "mcp__regex-replace__regex_replace" {
         let edit_mode = edits_allowed(hook_input.permission_mode.as_deref());
+        let is_subagent = hook_input
+            .transcript_path
+            .as_deref()
+            .is_some_and(|p| p.contains("/subagents/"));
         let is_dry_run = hook_input.tool_input.dry_run.unwrap_or(false);
 
-        if edit_mode || is_dry_run {
+        if edit_mode || is_dry_run || is_subagent {
             let reason = if is_dry_run {
                 "regex replace (dry run)"
+            } else if is_subagent {
+                "regex replace (subagent)"
             } else {
                 "regex replace (edit mode)"
             };
@@ -170,18 +180,19 @@ fn main() {
 
     // Load config
     let config = Config::load_or_default();
-    let edit_mode = edits_allowed(hook_input.permission_mode.as_deref());
+    let ctx = ExecContext {
+        edit_mode: edits_allowed(hook_input.permission_mode.as_deref()),
+        is_subagent: hook_input
+            .transcript_path
+            .as_deref()
+            .is_some_and(|p| p.contains("/subagents/")),
+    };
 
     // Analyze the command (bash or nushell)
     let result = if is_nushell {
-        analyze_nushell_command(
-            &command,
-            &config,
-            edit_mode,
-            hook_input.tool_input.cwd.as_deref(),
-        )
+        analyze_nushell_command(&command, &config, ctx, hook_input.tool_input.cwd.as_deref())
     } else {
-        analyze_command(&command, &config, edit_mode, hook_input.cwd.as_deref())
+        analyze_command(&command, &config, ctx, hook_input.cwd.as_deref())
     };
 
     // For "passthrough" permission on Bash, let Claude Code's built-in system handle it
@@ -255,17 +266,17 @@ fn main() {
 pub(crate) fn analyze_command(
     command: &str,
     config: &Config,
-    edit_mode: bool,
+    ctx: ExecContext,
     initial_cwd: Option<&str>,
 ) -> PermissionResult {
-    analyze_command_with_piped_query(command, config, edit_mode, initial_cwd, None, false)
+    analyze_command_with_piped_query(command, config, ctx, initial_cwd, None, false)
 }
 
 /// Analyze a bash command with optional piped query context
 fn analyze_command_with_piped_query(
     command: &str,
     config: &Config,
-    edit_mode: bool,
+    ctx: ExecContext,
     initial_cwd: Option<&str>,
     outer_piped_query: Option<&str>,
     is_remote: bool,
@@ -312,7 +323,7 @@ fn analyze_command_with_piped_query(
         let result = check_single_command(
             cmd,
             config,
-            edit_mode,
+            ctx,
             virtual_cwd.as_deref(),
             initial_cwd,
             has_uncertain_flow,
@@ -349,7 +360,7 @@ fn analyze_command_with_piped_query(
 fn analyze_nushell_command(
     command: &str,
     config: &Config,
-    edit_mode: bool,
+    ctx: ExecContext,
     cwd: Option<&str>,
 ) -> PermissionResult {
     let analysis = nushell::analyze(command);
@@ -380,8 +391,7 @@ fn analyze_nushell_command(
     for cmd in &analysis.commands {
         // For nushell, cwd is both virtual and initial (no cd tracking)
         // No piped query support for nushell (different piping semantics)
-        let result =
-            check_single_command(cmd, config, edit_mode, cwd, cwd, false, None, None, false);
+        let result = check_single_command(cmd, config, ctx, cwd, cwd, false, None, None, false);
 
         most_restrictive = Some(match most_restrictive {
             None => result,
@@ -421,7 +431,7 @@ fn extract_piped_query(prev_cmd: Option<&analyzer::Command>) -> Option<String> {
 fn check_single_command(
     cmd: &analyzer::Command,
     config: &Config,
-    edit_mode: bool,
+    ctx: ExecContext,
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     has_uncertain_flow: bool,
@@ -451,14 +461,14 @@ fn check_single_command(
 
             let inner_result = if unwrap_result.wrapper == "nu" {
                 // Use nushell parser for nu -c commands
-                analyze_nushell_command(inner, config, edit_mode, virtual_cwd)
+                analyze_nushell_command(inner, config, ctx, virtual_cwd)
             } else {
                 // Use bash parser for other wrappers
                 // Pass piped_query so it can reach nested mysql commands
                 analyze_command_with_piped_query(
                     inner,
                     config,
-                    edit_mode,
+                    ctx,
                     virtual_cwd,
                     piped_query,
                     inner_is_remote,
@@ -471,7 +481,7 @@ fn check_single_command(
                     &cmd.name,
                     &cmd.args,
                     unwrap_result.host.as_deref(),
-                    edit_mode,
+                    ctx,
                 );
 
                 // Return the more restrictive of host check and inner command check
@@ -487,7 +497,7 @@ fn check_single_command(
                 &cmd.name,
                 &cmd.args,
                 unwrap_result.host.as_deref(),
-                edit_mode,
+                ctx,
             );
         }
     }
@@ -523,14 +533,12 @@ fn check_single_command(
     // local cwd from allowing dangerous remote operations
     if !is_remote {
         // Try virtual_cwd first, then initial_cwd
-        let cwd_result =
-            config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, edit_mode);
+        let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, ctx);
         if cwd_result.permission == Permission::Allow {
             return cwd_result;
         }
         if initial_cwd != virtual_cwd {
-            let cwd_result =
-                config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode);
+            let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, ctx);
             if cwd_result.permission == Permission::Allow {
                 return cwd_result;
             }
@@ -587,6 +595,13 @@ fn check_single_command(
         }
     }
 
+    // Special handling for lua -e - allow read-only scripts
+    if cmd.name == "lua" || cmd.name == "luajit" {
+        if let Some(result) = scripts::lua::check_lua_script(cmd) {
+            return result;
+        }
+    }
+
     // Special handling for python -c or heredoc - allow read-only scripts
     // or scripts that only write to project dir / /tmp
     if cmd.name.starts_with("python") {
@@ -595,7 +610,7 @@ fn check_single_command(
         }
         // python3 script.py - check if the script path itself is allowed
         if let Some(result) =
-            scripts::check_interpreter_script(cmd, config, virtual_cwd, initial_cwd, edit_mode)
+            scripts::check_interpreter_script(cmd, config, virtual_cwd, initial_cwd, ctx)
         {
             return result;
         }
@@ -668,7 +683,7 @@ fn check_single_command(
 
     // Special handling for curl - allow localhost, check host rules for others
     if cmd.name == "curl" {
-        if let Some(result) = curl::check_curl(cmd, config, edit_mode) {
+        if let Some(result) = curl::check_curl(cmd, config, ctx) {
             return result;
         }
     }
@@ -715,7 +730,7 @@ fn check_single_command(
     // Try virtual_cwd first (from cd commands), then fall back to initial_cwd
     // This allows "cd /project && ./script" to match cwd-restricted rules
     if virtual_cwd.is_some() && virtual_cwd != initial_cwd {
-        let result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, edit_mode);
+        let result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, ctx);
         // If virtual_cwd matched an allow rule, use it
         if result.permission == Permission::Allow {
             return result;
@@ -723,7 +738,7 @@ fn check_single_command(
     }
 
     // Fall back to initial_cwd
-    config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode)
+    config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, ctx)
 }
 
 #[cfg(test)]
