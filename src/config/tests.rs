@@ -211,8 +211,7 @@ fn test_cwd_matches_subdirectories() {
     assert_eq!(result.permission, Permission::Ask);
 
     // Should NOT match parent directory
-    let result =
-        config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user"), false);
+    let result = config.check_command_with_cwd("run-tests.sh", &[], Some("/home/user"), false);
     assert_eq!(result.permission, Permission::Ask);
 }
 
@@ -274,8 +273,7 @@ fn test_cwd_path_resolution() {
     assert_eq!(result.permission, Permission::Ask);
 
     // Case 5: parent cwd (not under rule_cwd) -> no match
-    let result =
-        config.check_command_with_cwd("bin/custom-cli", &[], Some("/home/user"), false);
+    let result = config.check_command_with_cwd("bin/custom-cli", &[], Some("/home/user"), false);
     assert_eq!(result.permission, Permission::Ask);
 
     // Case 6: cwd is /project/other, cmd is bin/custom-cli
@@ -318,13 +316,11 @@ fn test_cwd_bare_command_matches_subdirectories() {
     assert_eq!(result.permission, Permission::Allow);
 
     // Parent directory should NOT match
-    let result =
-        config.check_command_with_cwd("browser-cli", &[], Some("/home/user"), false);
+    let result = config.check_command_with_cwd("browser-cli", &[], Some("/home/user"), false);
     assert_eq!(result.permission, Permission::Ask);
 
     // Sibling directory should NOT match
-    let result =
-        config.check_command_with_cwd("browser-cli", &[], Some("/home/user/other"), false);
+    let result = config.check_command_with_cwd("browser-cli", &[], Some("/home/user/other"), false);
     assert_eq!(result.permission, Permission::Ask);
 
     // With subcommands
@@ -359,8 +355,7 @@ fn test_rule_opts_with_args() {
     assert_eq!(result.permission, Permission::Allow);
 
     // Same with long form
-    let result =
-        config.check_command("mycli", &["--slug".into(), "gc".into(), "issues".into()]);
+    let result = config.check_command("mycli", &["--slug".into(), "gc".into(), "issues".into()]);
     assert_eq!(result.permission, Permission::Allow);
 }
 
@@ -396,7 +391,12 @@ fn test_edit_mode_permission() {
     // Without edit mode - ask
     let result = config.check_command_with_cwd(
         "magick",
-        &["input.webp".into(), "-crop".into(), "100x100+0+0".into(), "output.png".into()],
+        &[
+            "input.webp".into(),
+            "-crop".into(),
+            "100x100+0+0".into(),
+            "output.png".into(),
+        ],
         None,
         false,
     );
@@ -405,7 +405,12 @@ fn test_edit_mode_permission() {
     // With edit mode - allow
     let result = config.check_command_with_cwd(
         "magick",
-        &["input.webp".into(), "-crop".into(), "100x100+0+0".into(), "output.png".into()],
+        &[
+            "input.webp".into(),
+            "-crop".into(),
+            "100x100+0+0".into(),
+            "output.png".into(),
+        ],
         None,
         true,
     );

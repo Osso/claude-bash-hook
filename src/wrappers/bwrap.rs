@@ -20,8 +20,8 @@ const OPTS_WITH_TWO_ARGS: &[&str] = &[
     "--bind-data",
     "--file",
     "--overlay-src",
-    "--setenv",  // VAR VALUE
-    "--chmod",   // OCTET PATH
+    "--setenv", // VAR VALUE
+    "--chmod",  // OCTET PATH
 ];
 
 /// Options that take ONE argument
@@ -129,13 +129,21 @@ mod tests {
     #[test]
     fn test_bwrap_with_bind_mounts() {
         let cmd = make_cmd(&[
-            "--ro-bind", "/usr", "/usr",
-            "--ro-bind", "/lib", "/lib",
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--ro-bind",
+            "/lib",
+            "/lib",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
             "--unshare-all",
             "--",
-            "bash", "-c", "echo hello",
+            "bash",
+            "-c",
+            "echo hello",
         ]);
         let result = unwrap(&cmd).unwrap();
         assert_eq!(result.inner_command, Some("bash -c echo hello".to_string()));
@@ -147,8 +155,11 @@ mod tests {
         let cmd = make_cmd(&[
             "--unshare-net",
             "--unshare-pid",
-            "--ro-bind", "/usr", "/usr",
-            "ls", "-la",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "ls",
+            "-la",
         ]);
         let result = unwrap(&cmd).unwrap();
         assert_eq!(result.inner_command, Some("ls -la".to_string()));
@@ -157,8 +168,11 @@ mod tests {
     #[test]
     fn test_bwrap_with_chdir() {
         let cmd = make_cmd(&[
-            "--ro-bind", "/", "/",
-            "--chdir", "/tmp",
+            "--ro-bind",
+            "/",
+            "/",
+            "--chdir",
+            "/tmp",
             "--unshare-all",
             "--",
             "pwd",
@@ -171,10 +185,15 @@ mod tests {
     fn test_bwrap_with_setenv() {
         let cmd = make_cmd(&[
             "--clearenv",
-            "--setenv", "PATH", "/usr/bin",
-            "--ro-bind", "/usr", "/usr",
+            "--setenv",
+            "PATH",
+            "/usr/bin",
+            "--ro-bind",
+            "/usr",
+            "/usr",
             "--",
-            "cat", "/etc/hostname",
+            "cat",
+            "/etc/hostname",
         ]);
         let result = unwrap(&cmd).unwrap();
         assert_eq!(result.inner_command, Some("cat /etc/hostname".to_string()));
@@ -183,10 +202,14 @@ mod tests {
     #[test]
     fn test_bwrap_with_uid_gid() {
         let cmd = make_cmd(&[
-            "--uid", "1000",
-            "--gid", "1000",
+            "--uid",
+            "1000",
+            "--gid",
+            "1000",
             "--unshare-user",
-            "--ro-bind", "/usr", "/usr",
+            "--ro-bind",
+            "/usr",
+            "/usr",
             "--",
             "id",
         ]);

@@ -195,12 +195,8 @@ fn extract_external_call(
     let arg_strings: Vec<String> = args
         .iter()
         .filter_map(|arg| match arg {
-            nu_protocol::ast::ExternalArgument::Regular(e) => {
-                Some(span_to_string(e.span, source))
-            }
-            nu_protocol::ast::ExternalArgument::Spread(e) => {
-                Some(span_to_string(e.span, source))
-            }
+            nu_protocol::ast::ExternalArgument::Regular(e) => Some(span_to_string(e.span, source)),
+            nu_protocol::ast::ExternalArgument::Spread(e) => Some(span_to_string(e.span, source)),
         })
         .collect();
 

@@ -109,16 +109,14 @@ mod tests {
     #[test]
     fn test_relative_target_binary_allowed() {
         let cmd = make_cmd("./target/debug/myapp", &["test"]);
-        let result =
-            check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
+        let result = check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_relative_target_binary_no_dot_slash() {
         let cmd = make_cmd("target/debug/myapp", &[]);
-        let result =
-            check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
+        let result = check_target_binary(&cmd, None, Some("/home/user/project")).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 }

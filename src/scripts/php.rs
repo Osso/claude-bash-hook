@@ -367,10 +367,7 @@ mod tests {
 
     #[test]
     fn test_method_call_allowed() {
-        let cmd = make_cmd(&[
-            "-r",
-            r#"$obj->dangerousFunction();"#,
-        ]);
+        let cmd = make_cmd(&["-r", r#"$obj->dangerousFunction();"#]);
         let result = check_php_script(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }

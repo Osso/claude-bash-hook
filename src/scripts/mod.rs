@@ -109,7 +109,8 @@ mod tests {
         let config: Config = toml::from_str(toml).unwrap();
         let cmd = make_cmd("python3", &["scripts/compare_refs.py"]);
         let result =
-            check_interpreter_script(&cmd, &config, None, Some("/home/user/project"), false).unwrap();
+            check_interpreter_script(&cmd, &config, None, Some("/home/user/project"), false)
+                .unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 }

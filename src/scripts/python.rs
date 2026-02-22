@@ -389,10 +389,7 @@ mod tests {
         // Relative paths resolve within cwd, so they're allowed when cwd is set
         let cmd = make_cmd(
             "python3",
-            &[
-                "-c",
-                "open('phpstan-baseline.neon', 'w').write('data')",
-            ],
+            &["-c", "open('phpstan-baseline.neon', 'w').write('data')"],
         );
         let result = check_python_script(&cmd, None, Some("/home/user/project")).unwrap();
         assert_eq!(result.permission, Permission::Allow);
@@ -403,10 +400,7 @@ mod tests {
         // Relative paths without cwd should ask
         let cmd = make_cmd(
             "python3",
-            &[
-                "-c",
-                "open('phpstan-baseline.neon', 'w').write('data')",
-            ],
+            &["-c", "open('phpstan-baseline.neon', 'w').write('data')"],
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);

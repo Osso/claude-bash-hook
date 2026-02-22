@@ -523,12 +523,14 @@ fn check_single_command(
     // local cwd from allowing dangerous remote operations
     if !is_remote {
         // Try virtual_cwd first, then initial_cwd
-        let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, edit_mode);
+        let cwd_result =
+            config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, edit_mode);
         if cwd_result.permission == Permission::Allow {
             return cwd_result;
         }
         if initial_cwd != virtual_cwd {
-            let cwd_result = config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode);
+            let cwd_result =
+                config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode);
             if cwd_result.permission == Permission::Allow {
                 return cwd_result;
             }
@@ -592,7 +594,9 @@ fn check_single_command(
             return result;
         }
         // python3 script.py - check if the script path itself is allowed
-        if let Some(result) = scripts::check_interpreter_script(cmd, config, virtual_cwd, initial_cwd, edit_mode) {
+        if let Some(result) =
+            scripts::check_interpreter_script(cmd, config, virtual_cwd, initial_cwd, edit_mode)
+        {
             return result;
         }
     }
@@ -721,7 +725,6 @@ fn check_single_command(
     // Fall back to initial_cwd
     config.check_command_with_cwd(&cmd.name, &cmd.args, initial_cwd, edit_mode)
 }
-
 
 #[cfg(test)]
 mod tests;
