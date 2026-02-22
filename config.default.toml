@@ -10,6 +10,12 @@ default = "passthrough"
 # Uncomment to auto-allow subagent commands that don't match any rule:
 # subagent_default = "allow"
 
+# Override permission for main thread (non-subagent) commands.
+# When set, ALL main thread commands use this permission unless the rule
+# has an explicit main_thread_permission override.
+# Use "deny" to force all bash work through Task() agents.
+# main_thread_default = "deny"
+
 # Enable AI-powered advice for permission decisions (uses claude-safe CLI)
 enable_advice = false
 
@@ -51,18 +57,21 @@ commands = [
     "git remote", "git show", "git rev-parse", "git describe", "git merge-base", "git ls-files", "git ls-tree", "git tag", "git cat-file", "git check-ignore",
 ]
 permission = "allow"
+main_thread_permission = "allow"
 reason = "git read-only"
 
 # Git switch with force flag - ask
 [[rules]]
 commands = ["git switch -f", "git switch --force"]
 permission = "passthrough"
+main_thread_permission = "passthrough"
 reason = "force switch can discard changes"
 
 # Git safe operations (git push handled specially in code)
 [[rules]]
-commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit", "git init", "git clone", "git worktree"]
+commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit", "git push", "git init", "git clone", "git worktree"]
 permission = "allow"
+main_thread_permission = "allow"
 reason = "safe git operations"
 
 # Docker read-only and safe operations
@@ -103,13 +112,14 @@ reason = "kubectl read-only and safe operations"
 [[rules]]
 commands = [
     "glab mr list", "glab mr view", "glab mr update",
-    "gh repo list", "gh issue list", "gh issue view", "gh pr view", "gh run list", "gh run view",
+    "gh repo list", "gh issue list", "gh issue view", "gh pr view", "gh pr create", "gh run list", "gh run view",
     "glab ci status", "glab ci list", "glab ci view", "glab ci trace",
     "glab ci run", "glab ci retry", "glab ci trigger",
     "glab issue list", "glab issue view",
     "glab repo view",
 ]
 permission = "allow"
+main_thread_permission = "allow"
 reason = "glab read-only and safe operations"
 
 # raw api - deny (use specific subcommands instead)

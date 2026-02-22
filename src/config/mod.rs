@@ -9,6 +9,8 @@ const DEFAULT_CONFIG: &str = include_str!("../../config.default.toml");
 mod matching;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_overrides;
 
 /// Permission levels (ordered by restrictiveness)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -52,6 +54,13 @@ pub struct Config {
     /// Default permission for subagent commands when no rule matches (optional)
     #[serde(default)]
     pub subagent_default: Option<String>,
+
+    /// Override permission for main thread (non-subagent) commands.
+    /// When set, ALL main thread commands use this permission unless the rule
+    /// has an explicit `main_thread_permission` override.
+    /// Use "deny" to force all bash work through Task() agents.
+    #[serde(default)]
+    pub main_thread_default: Option<String>,
 
     /// Enable AI-powered advice for permission decisions
     #[serde(default)]
@@ -102,6 +111,11 @@ pub struct Rule {
     /// Override permission for subagent commands (Task() calls)
     #[serde(default)]
     pub subagent_permission: Option<String>,
+
+    /// Override permission for main thread (non-subagent) commands.
+    /// Only checked when Config.main_thread_default is set.
+    #[serde(default)]
+    pub main_thread_permission: Option<String>,
 
     /// Reason for this rule
     #[serde(default)]

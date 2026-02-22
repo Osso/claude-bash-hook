@@ -25,21 +25,12 @@ impl Config {
             }
         }
 
-        // For subagents, use subagent_default if set
-        let default_perm = if ctx.is_subagent {
-            if let Some(ref sd) = self.subagent_default {
-                sd.as_str()
-            } else {
-                &self.default
-            }
-        } else {
-            &self.default
-        };
+        // Determine default permission based on context
+        let (default_perm, reason, suggestion) = self.resolve_default(ctx, suggestion);
 
-        // Return default
         PermissionResult {
             permission: self.parse_permission(default_perm),
-            reason: "No matching rule".to_string(),
+            reason,
             suggestion,
         }
     }
@@ -62,20 +53,32 @@ impl Config {
             }
         }
 
-        let default_perm = if ctx.is_subagent {
-            if let Some(ref sd) = self.subagent_default {
-                sd.as_str()
-            } else {
-                &self.default
-            }
-        } else {
-            &self.default
-        };
+        let (default_perm, reason, suggestion) = self.resolve_default(ctx, suggestion);
 
         PermissionResult {
             permission: self.parse_permission(default_perm),
-            reason: "No matching rule".to_string(),
+            reason,
             suggestion,
+        }
+    }
+
+    /// Resolve default permission, reason, and suggestion based on context
+    fn resolve_default<'a>(
+        &'a self,
+        ctx: ExecContext,
+        suggestion: Option<String>,
+    ) -> (&'a str, String, Option<String>) {
+        if ctx.is_subagent {
+            let perm = self.subagent_default.as_deref().unwrap_or(&self.default);
+            (perm, "No matching rule".to_string(), suggestion)
+        } else if let Some(ref mtd) = self.main_thread_default {
+            (
+                mtd.as_str(),
+                "main thread bash disabled".to_string(),
+                Some("Use Task() to delegate bash commands to subagents".to_string()),
+            )
+        } else {
+            (&self.default, "No matching rule".to_string(), suggestion)
         }
     }
 
@@ -89,34 +92,47 @@ impl Config {
         suggestion: Option<String>,
         ctx: ExecContext,
     ) -> Option<PermissionResult> {
-        let effective_perm = rule.effective_permission(ctx);
+        // Check if main_thread_default is overriding (no explicit main_thread_permission on rule)
+        let main_thread_overriding = !ctx.is_subagent
+            && self.main_thread_default.is_some()
+            && rule.main_thread_permission.is_none();
+
+        let effective_perm = if !ctx.is_subagent && self.main_thread_default.is_some() {
+            rule.main_thread_permission
+                .as_deref()
+                .unwrap_or(self.main_thread_default.as_deref().unwrap())
+        } else {
+            rule.effective_permission(ctx)
+        };
 
         for pattern in &rule.commands {
-            // If rule has cwd constraint, do path-resolved matching
-            if let Some(ref rule_cwd) = rule.cwd {
-                if self.matches_pattern_with_path_resolution(
+            let matched = if let Some(ref rule_cwd) = rule.cwd {
+                self.matches_pattern_with_path_resolution(
                     pattern,
                     name,
                     args,
                     cwd,
                     rule_cwd,
                     &rule.opts_with_args,
-                ) {
-                    return Some(PermissionResult {
-                        permission: self.parse_permission(effective_perm),
-                        reason: rule.reason.clone(),
-                        suggestion,
-                    });
-                }
+                )
             } else {
-                // No cwd constraint - use simple pattern matching
-                if self.matches_pattern_with_cwd(pattern, name, args, cwd, &rule.opts_with_args) {
-                    return Some(PermissionResult {
-                        permission: self.parse_permission(effective_perm),
-                        reason: rule.reason.clone(),
-                        suggestion,
-                    });
-                }
+                self.matches_pattern_with_cwd(pattern, name, args, cwd, &rule.opts_with_args)
+            };
+
+            if matched {
+                let (reason, suggestion) = if main_thread_overriding {
+                    (
+                        "main thread bash disabled".to_string(),
+                        Some("Use Task() to delegate bash commands to subagents".to_string()),
+                    )
+                } else {
+                    (rule.reason.clone(), suggestion)
+                };
+                return Some(PermissionResult {
+                    permission: self.parse_permission(effective_perm),
+                    reason,
+                    suggestion,
+                });
             }
         }
         None
@@ -285,7 +301,27 @@ impl Config {
                     }
                 }
 
-                let effective_perm = rule.effective_permission(ctx);
+                let main_thread_overriding = !ctx.is_subagent
+                    && self.main_thread_default.is_some()
+                    && rule.main_thread_permission.is_none();
+
+                let effective_perm = if !ctx.is_subagent && self.main_thread_default.is_some() {
+                    rule.main_thread_permission
+                        .as_deref()
+                        .unwrap_or(self.main_thread_default.as_deref().unwrap())
+                } else {
+                    rule.effective_permission(ctx)
+                };
+
+                if main_thread_overriding {
+                    return Some(PermissionResult {
+                        permission: self.parse_permission(effective_perm),
+                        reason: "main thread bash disabled".to_string(),
+                        suggestion: Some(
+                            "Use Task() to delegate bash commands to subagents".to_string(),
+                        ),
+                    });
+                }
 
                 // Check if this is a host-checking rule
                 if effective_perm == "check_host" {
