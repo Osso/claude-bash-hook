@@ -180,8 +180,8 @@ fn main() {
         } else {
             // Bash: let Claude Code handle it
             info!(
-                "decision=passthrough cwd={:?} command={:?} reason={:?}",
-                hook_input.cwd, command, result.reason
+                "decision=passthrough is_subagent={} transcript_path={:?} cwd={:?} command={:?} reason={:?}",
+                is_subagent, hook_input.transcript_path, hook_input.cwd, command, result.reason
             );
             return;
         }
@@ -197,8 +197,8 @@ fn main() {
         Permission::Deny => "deny",
     };
     info!(
-        "decision={} cwd={:?} command={:?} reason={:?}",
-        decision_str, hook_input.cwd, command, result.reason
+        "decision={} is_subagent={} transcript_path={:?} cwd={:?} command={:?} reason={:?}",
+        decision_str, is_subagent, hook_input.transcript_path, hook_input.cwd, command, result.reason
     );
 
     // Build reason, optionally with AI advice
