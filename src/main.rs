@@ -18,6 +18,7 @@ mod scripts;
 mod sql;
 mod tar;
 mod tee;
+mod tool_handlers;
 mod wrappers;
 
 use config::{Config, ExecContext, Permission, PermissionResult};
@@ -127,37 +128,15 @@ fn main() {
         }
     };
 
-    // Handle Write tool - block /tmp/* unless under /tmp/claude/*
-    if hook_input.tool_name == "Write" {
-        if let Some(ref path) = hook_input.tool_input.file_path {
-            if let Some(result) = check_write_path(path) {
-                output_decision(&result.0, &result.1);
-            }
-        }
-        return;
-    }
+    // Compute common context once
+    let is_subagent = hook_input
+        .transcript_path
+        .as_deref()
+        .is_some_and(|p| p.contains("/subagents/"));
+    let config = Config::load_or_default();
 
-    // Handle regex-replace MCP tool
-    if hook_input.tool_name == "mcp__regex-replace__regex_replace" {
-        let edit_mode = edits_allowed(hook_input.permission_mode.as_deref());
-        let is_subagent = hook_input
-            .transcript_path
-            .as_deref()
-            .is_some_and(|p| p.contains("/subagents/"));
-        let is_dry_run = hook_input.tool_input.dry_run.unwrap_or(false);
-
-        if edit_mode || is_dry_run || is_subagent {
-            let reason = if is_dry_run {
-                "regex replace (dry run)"
-            } else if is_subagent {
-                "regex replace (subagent)"
-            } else {
-                "regex replace (edit mode)"
-            };
-            output_decision("allow", reason);
-        } else {
-            output_decision("ask", "regex replace modifies files (not in edit mode)");
-        }
+    // Handle non-bash tools (Write, Edit, regex-replace)
+    if tool_handlers::handle_non_bash_tool(&hook_input, &config, is_subagent) {
         return;
     }
 
@@ -166,7 +145,6 @@ fn main() {
     let is_nushell = hook_input.tool_name == "mcp__nushell__execute";
 
     if !is_bash && !is_nushell {
-        // Pass through - don't output anything for other tools
         return;
     }
 
@@ -178,14 +156,9 @@ fn main() {
         }
     };
 
-    // Load config
-    let config = Config::load_or_default();
     let ctx = ExecContext {
         edit_mode: edits_allowed(hook_input.permission_mode.as_deref()),
-        is_subagent: hook_input
-            .transcript_path
-            .as_deref()
-            .is_some_and(|p| p.contains("/subagents/")),
+        is_subagent,
     };
 
     // Analyze the command (bash or nushell)
