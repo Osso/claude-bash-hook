@@ -15,6 +15,8 @@ PreToolUse hook for Claude Code that provides granular permission control over B
   - python.rs - Python via `-c` or heredoc (allows file I/O, denies subprocess/os.system/eval)
   - shell.rs - Shell scripts via `sh -c` / `bash -c` (re-parses inner commands through the same rule engine)
   - php.rs - PHP via `-r` flag (allows read-only operations, denies exec/system/passthru)
+  - lua.rs - Lua/LuaJIT via `-e` flag (allows read-only ops, denies os.execute/io.popen/ffi)
+- **tool_handlers.rs** - Non-bash tool handling (Write, Edit, regex-replace) with main thread blocking
 - **sql.rs** - MySQL/MariaDB/SQLite query analysis (allow SELECT, ask for writes)
 - **redis.rs** - Redis command analysis (allow read-only commands like GET/LLEN, ask for writes)
 - **git.rs** - Git-specific rules (push branch protection, checkout handling)
@@ -75,6 +77,38 @@ command = "git checkout"
 message = "Consider using 'git switch' instead"
 ```
 
+### Context Overrides
+
+Rules support context-dependent permission overrides:
+
+- **edit_mode_permission** - Override when Claude is in edit/acceptEdits mode
+- **subagent_permission** - Override for subagent contexts (Task() workers)
+- **main_thread_permission** - Override for main thread when `main_thread_default` is set
+
+Priority: `subagent_permission` > `edit_mode_permission` > base `permission`
+
+### Main Thread Control
+
+When `main_thread_default` is set (e.g., `"deny"`), ALL main thread commands are blocked unless the matching rule has an explicit `main_thread_permission`. This forces delegation to Task() subagents.
+
+Affects: Bash, Nushell, Write, Edit tools. Subagents are unaffected.
+
+```toml
+main_thread_default = "deny"  # Block all main thread commands
+
+[[rules]]
+commands = ["git status", "git log", "git diff"]
+permission = "allow"
+main_thread_permission = "allow"  # Exempt from main thread block
+reason = "git read-only"
+```
+
+### Global Defaults
+
+- **default** - Fallback for unmatched commands
+- **subagent_default** - Fallback for unmatched commands in subagent context
+- **main_thread_default** - When set, overrides all main thread permissions (rule and default)
+
 ### Permission Levels
 
 - **allow** - Auto-approve, no user prompt
@@ -106,7 +140,8 @@ Outputs JSON to stdout (or nothing for passthrough):
 ```
 
 Also handles:
-- `Write` tool - blocks `/tmp/*` unless under `/tmp/claude/*`
+- `Write` / `Edit` tools - blocks `/tmp/*` unless under `/tmp/claude/*`; denies on main thread when `main_thread_default` is set
+- `mcp__regex-replace__regex_replace` - Auto-allows in edit mode, subagent, or dry run; asks otherwise
 - `mcp__nushell__execute` - Nushell MCP tool (passthrough becomes ask)
 
 ## Testing
