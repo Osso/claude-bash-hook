@@ -108,6 +108,10 @@ const SAFE_NUSHELL_BUILTINS: &[&str] = &[
     "to",
     "from",
     "into",
+    // Binary
+    "bytes",
+    "decode",
+    "encode",
     // String operations
     "str",
     "split",
@@ -121,10 +125,19 @@ const SAFE_NUSHELL_BUILTINS: &[&str] = &[
     "min",
     "max",
     "count",
-    // Comparison/logic
+    // Control flow
     "if",
     "else",
     "match",
+    "while",
+    "for",
+    "loop",
+    "break",
+    "continue",
+    "return",
+    "try",
+    "catch",
+    // Comparison/logic
     "not",
     "and",
     "or",
