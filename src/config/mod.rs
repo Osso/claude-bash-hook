@@ -85,6 +85,11 @@ pub struct Config {
     /// Command suggestions
     #[serde(default)]
     pub suggestions: Vec<Suggestion>,
+
+    /// File paths allowed for Write/Edit on main thread even when main_thread_default is deny.
+    /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
+    #[serde(default)]
+    pub main_thread_write_allow: Vec<String>,
 }
 
 fn default_permission() -> String {
@@ -269,6 +274,32 @@ impl Config {
     /// Check if a command name is a MySQL/MariaDB alias
     pub fn is_mysql_alias(&self, name: &str) -> bool {
         self.mysql_aliases.iter().any(|alias| alias == name)
+    }
+
+    /// Check if a file path is allowed for main thread writes
+    pub fn is_main_thread_write_allowed(&self, path: &str) -> bool {
+        let home = std::env::var("HOME").unwrap_or_default();
+        for pattern in &self.main_thread_write_allow {
+            let expanded = if pattern.starts_with("~/") {
+                format!("{}{}", home, &pattern[1..])
+            } else {
+                pattern.clone()
+            };
+            // Exact match
+            if path == expanded {
+                return true;
+            }
+            // Simple glob: "dir/*" matches any direct child of dir
+            if let Some(prefix) = expanded.strip_suffix("/*") {
+                if path.starts_with(prefix)
+                    && path.len() > prefix.len()
+                    && path.as_bytes()[prefix.len()] == b'/'
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 

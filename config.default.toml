@@ -16,6 +16,10 @@ default = "passthrough"
 # Use "deny" to force all bash work through Task() agents.
 # main_thread_default = "deny"
 
+# File paths allowed for Write/Edit on main thread (even when main_thread_default = "deny")
+# Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
+# main_thread_write_allow = ["~/.claude/rules/99-calibration.md"]
+
 # Enable AI-powered advice for permission decisions (uses claude-safe CLI)
 enable_advice = false
 

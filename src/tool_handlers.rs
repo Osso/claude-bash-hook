@@ -14,11 +14,18 @@ pub fn handle_non_bash_tool(hook_input: &HookInput, config: &Config, is_subagent
 
     if hook_input.tool_name == "Write" || hook_input.tool_name == "Edit" {
         if is_main_thread_disabled {
-            output_decision(
-                "deny",
-                "main thread file writes disabled. Use Task() to delegate to subagents",
-            );
-            return true;
+            let whitelisted = hook_input
+                .tool_input
+                .file_path
+                .as_deref()
+                .is_some_and(|p| config.is_main_thread_write_allowed(p));
+            if !whitelisted {
+                output_decision(
+                    "deny",
+                    "main thread file writes disabled. Use Task() to delegate to subagents",
+                );
+                return true;
+            }
         }
         if let Some(ref path) = hook_input.tool_input.file_path {
             if let Some(result) = check_write_path(path) {
