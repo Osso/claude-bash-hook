@@ -28,19 +28,23 @@ pub fn analyze(cmd: &str) -> NushellAnalysisResult {
 
     let block = parse(&mut working_set, None, cmd.as_bytes(), false);
 
-    // Check for parse errors, but ignore "Unknown state" errors from missing stdlib
+    // Check for parse errors, but ignore errors from missing stdlib
     // Only real syntax errors should fail (unclosed braces, etc.)
     let has_real_error = working_set.parse_errors.iter().any(|e| {
         let msg = format!("{}", e);
-        // Unknown state happens when builtins aren't loaded - not a real syntax error
-        !msg.contains("Unknown state")
+        // Unknown state and Variable not found happen when builtins/context aren't loaded
+        // These are not real syntax errors
+        !msg.contains("Unknown state") && !msg.contains("Variable not found")
     });
 
     if has_real_error {
         let error = working_set
             .parse_errors
             .iter()
-            .find(|e| !format!("{}", e).contains("Unknown state"))
+            .find(|e| {
+                let msg = format!("{}", e);
+                !msg.contains("Unknown state") && !msg.contains("Variable not found")
+            })
             .map(|e| format!("{}", e))
             .unwrap_or_else(|| "Unknown parse error".to_string());
 
@@ -381,5 +385,27 @@ mod tests {
         assert!(result.success);
         // Should have no dangerous commands
         assert_eq!(result.commands.len(), 0);
+    }
+
+    #[test]
+    fn test_complex_nushell_pipeline() {
+        let script = r#"
+            let mat_ids = (lines | into int)
+            let materials = (open /tmp/test.csv | from csv)
+            $materials
+            | where ID in $mat_ids
+            | select ID ChrModelTextureTargetID MaterialResourcesID
+            | group-by ChrModelTextureTargetID
+            | transpose key val
+            | sort-by key
+            | each {|row| {TargetID: $row.key, count: ($row.val | length)}}
+        "#;
+        let result = analyze(script);
+        eprintln!("success: {}, error: {:?}", result.success, result.error);
+        for cmd in &result.commands {
+            eprintln!("extracted: {} {:?}", cmd.name, cmd.args);
+        }
+        assert!(result.success);
+        assert_eq!(result.commands.len(), 0, "All commands should be safe builtins");
     }
 }
