@@ -34,7 +34,7 @@ pub fn analyze(cmd: &str) -> NushellAnalysisResult {
         let msg = format!("{}", e);
         // Unknown state and Variable not found happen when builtins/context aren't loaded
         // These are not real syntax errors
-        !msg.contains("Unknown state") && !msg.contains("Variable not found")
+        !msg.contains("Unknown state") && !msg.contains("Variable not found") && !msg.contains("IncompatiblePathAccess")
     });
 
     if has_real_error {
@@ -43,7 +43,7 @@ pub fn analyze(cmd: &str) -> NushellAnalysisResult {
             .iter()
             .find(|e| {
                 let msg = format!("{}", e);
-                !msg.contains("Unknown state") && !msg.contains("Variable not found")
+                !msg.contains("Unknown state") && !msg.contains("Variable not found") && !msg.contains("IncompatiblePathAccess")
             })
             .map(|e| format!("{}", e))
             .unwrap_or_else(|| "Unknown parse error".to_string());

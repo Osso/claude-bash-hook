@@ -4,6 +4,15 @@ use crate::analyzer::Command;
 use crate::config::{Permission, PermissionResult};
 use regex::Regex;
 
+/// Safe modules for __import__() calls. Anything not listed here triggers "ask".
+const SAFE_IMPORT_MODULES: &[&str] = &[
+    "os", "sys", "json", "struct", "re", "math", "collections", "itertools", "functools",
+    "datetime", "time", "hashlib", "base64", "binascii", "codecs", "csv", "string",
+    "textwrap", "difflib", "pathlib", "glob", "fnmatch", "stat", "posixpath", "ntpath",
+    "io", "abc", "copy", "pprint", "decimal", "fractions", "random", "bisect", "heapq",
+    "enum", "dataclasses", "typing", "operator", "contextlib",
+];
+
 /// Dangerous Python functions/modules that have side effects
 const DANGEROUS_PATTERNS: &[&str] = &[
     // Command execution
@@ -17,7 +26,6 @@ const DANGEROUS_PATTERNS: &[&str] = &[
     "eval(",
     "exec(",
     "compile(",
-    "__import__",
     // File writing
     "open(", // We'll check for write modes separately
     "file(",
@@ -124,6 +132,29 @@ fn has_write_open(code: &str) -> bool {
 }
 
 /// Check if Python code only uses read-only operations
+/// Check if all __import__() calls use safe modules
+fn has_safe_imports_only(code: &str) -> bool {
+    let mut pos = 0;
+    while let Some(idx) = code[pos..].find("__import__") {
+        let start = pos + idx + "__import__".len();
+        // Find the opening paren and extract module name
+        let rest = &code[start..];
+        if let Some(paren) = rest.find('(') {
+            let after_paren = &rest[paren + 1..];
+            if let Some(module) = extract_string_arg(after_paren) {
+                if !SAFE_IMPORT_MODULES.contains(&module.as_str()) {
+                    return false;
+                }
+            } else {
+                // Can't determine module — not safe
+                return false;
+            }
+        }
+        pos = start;
+    }
+    true
+}
+
 fn is_readonly_python(code: &str) -> bool {
     let code_lower = code.to_lowercase();
 
@@ -142,6 +173,11 @@ fn is_readonly_python(code: &str) -> bool {
         if code_lower.contains(&pattern_lower) {
             return false;
         }
+    }
+
+    // Check __import__() calls against safe module whitelist
+    if code.contains("__import__") && !has_safe_imports_only(code) {
+        return false;
     }
 
     true
@@ -539,6 +575,46 @@ mod tests {
         let full_cmd =
             "python3 << 'EOF'\nwith open('/etc/passwd', 'w') as f:\n    f.write('data')\nEOF";
         let result = check_python_script(&cmd, Some(full_cmd), Some("/project")).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_dunder_import_safe_module_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "size = __import__('os').path.getsize('/tmp/foo'); print(size)"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_dunder_import_struct_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "__import__('struct').unpack('<I', data)"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_dunder_import_subprocess_asks() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "__import__('subprocess').run(['ls'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_dunder_import_unknown_module_asks() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "__import__('ctypes').cdll"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
 }
