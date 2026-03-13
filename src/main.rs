@@ -37,6 +37,9 @@ struct HookInput {
     /// Permission mode: "default", "plan", "acceptEdits", "bypassPermissions"
     #[serde(default)]
     permission_mode: Option<String>,
+    /// Codex access mode: "full_access", "supervised", etc.
+    #[serde(default)]
+    access_mode: Option<String>,
     /// Working directory where Claude Code session started
     #[serde(default)]
     cwd: Option<String>,
@@ -46,6 +49,9 @@ struct HookInput {
     /// Hook event name: "PreToolUse", "SubagentStart", "SubagentStop", etc.
     #[serde(default)]
     hook_event_name: Option<String>,
+    /// Newer hook payloads can nest metadata under hook_event
+    #[serde(default)]
+    hook_event: Option<HookEvent>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -58,9 +64,75 @@ struct ToolInput {
     dry_run: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct HookEvent {
+    access_mode: Option<String>,
+}
+
+impl HookInput {
+    pub(crate) fn access_mode(&self) -> Option<&str> {
+        self.access_mode
+            .as_deref()
+            .or(self.hook_event.as_ref().and_then(|event| event.access_mode.as_deref()))
+    }
+}
+
 /// Check if edits are allowed based on permission mode
 fn edits_allowed(mode: Option<&str>) -> bool {
     matches!(mode, Some("acceptEdits") | Some("bypassPermissions"))
+}
+
+pub(crate) fn apply_access_mode_permission(
+    permission: Permission,
+    access_mode: Option<&str>,
+) -> Permission {
+    match permission {
+        Permission::Deny => Permission::Deny,
+        Permission::Ask if matches!(access_mode, Some("full_access")) => Permission::Allow,
+        Permission::Passthrough if matches!(access_mode, Some("full_access")) => Permission::Allow,
+        Permission::Passthrough if matches!(access_mode, Some("supervised")) => Permission::Ask,
+        _ => permission,
+    }
+}
+
+pub(crate) fn apply_access_mode_result(
+    mut result: PermissionResult,
+    access_mode: Option<&str>,
+) -> PermissionResult {
+    let original_permission = result.permission;
+    let updated_permission = apply_access_mode_permission(original_permission, access_mode);
+
+    if updated_permission != original_permission
+        && let Some(mode) = access_mode
+    {
+        let reason = access_mode_reason(mode, original_permission, updated_permission);
+        if result.reason.is_empty() {
+            result.reason = reason;
+        } else {
+            result.reason = format!("{}; {}", result.reason, reason);
+        }
+    }
+
+    result.permission = updated_permission;
+    result
+}
+
+fn access_mode_reason(access_mode: &str, from: Permission, to: Permission) -> String {
+    format!(
+        "access_mode={} upgraded {} to {}",
+        access_mode,
+        permission_name(from),
+        permission_name(to)
+    )
+}
+
+pub(crate) fn permission_name(permission: Permission) -> &'static str {
+    match permission {
+        Permission::Allow => "allow",
+        Permission::Passthrough => "passthrough",
+        Permission::Ask => "ask",
+        Permission::Deny => "deny",
+    }
 }
 
 /// Output to Claude Code
@@ -172,6 +244,8 @@ fn main() {
         return;
     }
 
+    let access_mode = hook_input.access_mode().map(str::to_string);
+
     let command = match hook_input.tool_input.command {
         Some(cmd) => cmd,
         None => {
@@ -191,6 +265,7 @@ fn main() {
     } else {
         analyze_command(&command, &config, ctx, hook_input.cwd.as_deref())
     };
+    let result = apply_access_mode_result(result, access_mode.as_deref());
 
     // For "passthrough" permission on Bash, let Claude Code's built-in system handle it
     // For nushell MCP, there's no built-in permission system, so ask explicitly
@@ -214,12 +289,7 @@ fn main() {
     };
 
     // Log the decision
-    let decision_str = match result.permission {
-        Permission::Allow => "allow",
-        Permission::Passthrough => "passthrough",
-        Permission::Ask => "ask",
-        Permission::Deny => "deny",
-    };
+    let decision_str = permission_name(result.permission);
     info!(
         "decision={} is_subagent={} session={:?} cwd={:?} command={:?} reason={:?}",
         decision_str, is_subagent, hook_input.session_id, hook_input.cwd, command, result.reason

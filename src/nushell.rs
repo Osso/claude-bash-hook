@@ -109,6 +109,8 @@ const SAFE_NUSHELL_BUILTINS: &[&str] = &[
     "columns",
     "values",
     "headers",
+    "items",
+    "keys",
     "reduce",
     "wrap",
     "compact",
@@ -419,6 +421,18 @@ mod tests {
         assert!(result.success);
         // Should have no dangerous commands
         assert_eq!(result.commands.len(), 0);
+    }
+
+    #[test]
+    fn test_items_closure_pipeline() {
+        let script = r#"open ~/.claude.json | get githubRepoPaths | items {|k, v| $v | where {|p| ($p | str contains "/worktrees/") and (not ($p | path exists))} } | flatten"#;
+        let result = analyze(script);
+        eprintln!("success: {}, error: {:?}", result.success, result.error);
+        for cmd in &result.commands {
+            eprintln!("extracted: {} {:?}", cmd.name, cmd.args);
+        }
+        assert!(result.success);
+        assert_eq!(result.commands.len(), 0, "All commands should be safe builtins");
     }
 
     #[test]
