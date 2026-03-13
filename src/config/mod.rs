@@ -90,6 +90,10 @@ pub struct Config {
     /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
     #[serde(default)]
     pub main_thread_write_allow: Vec<String>,
+
+    /// Rewrite configuration for prepending a binary (e.g., rtk) to allowed commands
+    #[serde(default)]
+    pub rewrite: Option<RewriteConfig>,
 }
 
 fn default_permission() -> String {
@@ -191,7 +195,67 @@ pub struct Suggestion {
     pub pattern: Option<String>,
 }
 
+/// Configuration for rewriting commands through a proxy binary
+#[derive(Debug, Deserialize)]
+pub struct RewriteConfig {
+    /// Whether rewriting is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Binary to prepend (e.g., "rtk")
+    #[serde(default = "default_rewrite_binary")]
+    pub binary: String,
+    /// Command prefixes to match for rewriting
+    #[serde(default)]
+    pub prefixes: Vec<String>,
+}
+
+fn default_rewrite_binary() -> String {
+    "rtk".to_string()
+}
+
 impl Config {
+    /// Check if a command should be rewritten and return the rewritten command.
+    /// Only call this for commands that were allowed.
+    pub fn rewrite_command(&self, command: &str) -> Option<String> {
+        let rewrite = self.rewrite.as_ref()?;
+        if !rewrite.enabled || rewrite.prefixes.is_empty() {
+            return None;
+        }
+
+        let trimmed = command.trim();
+
+        // Skip compound commands (&&, ||, ;, |) — too risky to partially rewrite
+        if trimmed.contains("&&")
+            || trimmed.contains("||")
+            || trimmed.contains(';')
+            || trimmed.contains('|')
+        {
+            return None;
+        }
+
+        // Skip if already rewritten
+        let binary = &rewrite.binary;
+        if trimmed.starts_with(binary) && trimmed[binary.len()..].starts_with(' ') {
+            return None;
+        }
+
+        // Find longest matching prefix
+        let mut best_match: Option<&str> = None;
+        for prefix in &rewrite.prefixes {
+            // Must match at word boundary: "git" matches "git status" but not "github"
+            if trimmed == prefix.as_str()
+                || (trimmed.starts_with(prefix.as_str())
+                    && trimmed.as_bytes().get(prefix.len()) == Some(&b' '))
+            {
+                if best_match.map_or(true, |b| prefix.len() > b.len()) {
+                    best_match = Some(prefix);
+                }
+            }
+        }
+
+        best_match.map(|_| format!("{} {}", binary, trimmed))
+    }
+
     /// Load configuration from a file
     pub fn load(path: &Path) -> Result<Self, String> {
         let content =
