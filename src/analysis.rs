@@ -328,6 +328,14 @@ fn check_database(
             return Some(sql::check_piped_query(query));
         }
     }
+    if cmd.args.first().is_some_and(|sub| config.is_positional_sql_command(&cmd.name, sub)) {
+        if let Some(result) = sql::check_positional_sql_query(cmd) {
+            return Some(result);
+        }
+        if let Some(query) = piped_query {
+            return Some(sql::check_piped_query(query));
+        }
+    }
     if cmd.name == "redis-cli" || cmd.name == "valkey-cli" {
         return redis::check_redis_cli(cmd);
     }

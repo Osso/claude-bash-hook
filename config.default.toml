@@ -23,6 +23,10 @@ default = "passthrough"
 # Enable AI-powered advice for permission decisions (uses claude-safe CLI)
 enable_advice = false
 
+# Commands where SQL is passed as a positional argument (after the subcommand).
+# Format: "command subcommand" — e.g., "groundcover-cli sql-clickhouse"
+positional_sql_commands = []
+
 # Rules are checked in order - first match wins
 # More specific rules should come before general ones
 #

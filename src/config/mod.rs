@@ -74,6 +74,11 @@ pub struct Config {
     #[serde(default = "default_mysql_aliases")]
     pub mysql_aliases: Vec<String>,
 
+    /// Commands where the SQL query is passed as a positional argument.
+    /// Format: "command subcommand" (e.g., "groundcover-cli sql-clickhouse")
+    #[serde(default)]
+    pub positional_sql_commands: Vec<String>,
+
     /// Command rules
     #[serde(default)]
     pub rules: Vec<Rule>,
@@ -338,6 +343,12 @@ impl Config {
     /// Check if a command name is a MySQL/MariaDB alias
     pub fn is_mysql_alias(&self, name: &str) -> bool {
         self.mysql_aliases.iter().any(|alias| alias == name)
+    }
+
+    /// Check if a command+subcommand pair is a positional SQL command
+    pub fn is_positional_sql_command(&self, name: &str, subcommand: &str) -> bool {
+        let key = format!("{} {}", name, subcommand);
+        self.positional_sql_commands.iter().any(|entry| entry == &key)
     }
 
     /// Check if a file path is allowed for main thread writes

@@ -53,53 +53,35 @@ fn strip_sql_comments(query: &str) -> String {
     result
 }
 
+/// Read-only SQL statement prefixes (SQL keywords and SQLite3 dot commands)
+const READ_ONLY_PREFIXES: &[&str] = &[
+    "SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "USE", "PRAGMA",
+    ".SCHEMA", ".TABLES", ".INDICES", ".INDEXES", ".DUMP",
+    ".MODE", ".HEADERS", ".SEPARATOR", ".WIDTH", ".PRINT", ".SHOW", ".DATABASES",
+];
+
+/// Check if a single SQL statement (no semicolons) is read-only
+fn is_statement_readonly(statement: &str) -> bool {
+    let trimmed = statement.trim().to_uppercase();
+    trimmed.is_empty() || READ_ONLY_PREFIXES.iter().any(|p| trimmed.starts_with(p))
+}
+
 /// Check if a SQL query is read-only
 fn check_query_readonly(query: &str) -> PermissionResult {
-    // Strip comments first
     let query = strip_sql_comments(query);
-    // Read-only SQL statements
-    let read_only_prefixes = [
-        "SELECT",
-        "SHOW",
-        "DESCRIBE",
-        "DESC",
-        "EXPLAIN",
-        "USE",
-        "PRAGMA",
-        // SQLite3 dot commands (read-only)
-        ".SCHEMA",
-        ".TABLES",
-        ".INDICES",
-        ".INDEXES",
-        ".DUMP",
-        ".MODE",
-        ".HEADERS",
-        ".SEPARATOR",
-        ".WIDTH",
-        ".PRINT",
-        ".SHOW",
-        ".DATABASES",
-    ];
-
-    // Split by semicolons and check ALL statements
-    for statement in query.split(';') {
-        let trimmed = statement.trim().to_uppercase();
-        if trimmed.is_empty() {
-            continue;
+    let all_readonly = query.split(';').all(is_statement_readonly);
+    if all_readonly {
+        PermissionResult {
+            permission: Permission::Allow,
+            reason: "read-only SQL query".to_string(),
+            suggestion: None,
         }
-        if !read_only_prefixes.iter().any(|p| trimmed.starts_with(p)) {
-            return PermissionResult {
-                permission: Permission::Ask,
-                reason: "SQL write operation".to_string(),
-                suggestion: None,
-            };
+    } else {
+        PermissionResult {
+            permission: Permission::Ask,
+            reason: "SQL write operation".to_string(),
+            suggestion: None,
         }
-    }
-
-    PermissionResult {
-        permission: Permission::Allow,
-        reason: "read-only SQL query".to_string(),
-        suggestion: None,
     }
 }
 
@@ -198,6 +180,13 @@ fn extract_clickhouse_query(cmd: &Command) -> Option<String> {
         }
     }
     None
+}
+
+/// Check if a positional SQL command has a read-only query.
+/// Expects cmd.args[0] = subcommand, cmd.args[1] = SQL query.
+pub fn check_positional_sql_query(cmd: &Command) -> Option<PermissionResult> {
+    let query = cmd.args.get(1)?;
+    Some(check_query_readonly(&strip_quotes(query)))
 }
 
 /// Check if a clickhouse-client command has a read-only query
@@ -462,6 +451,32 @@ mod tests {
         let cmd = make_cmd("clickhouse-client", &["-q", query]);
         let result = check_clickhouse_query(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    // Positional SQL command tests
+
+    #[test]
+    fn test_positional_sql_select_allowed() {
+        let cmd = make_cmd("groundcover-cli", &["sql-clickhouse", "SELECT * FROM users"]);
+        let result = check_positional_sql_query(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_positional_sql_insert_asks() {
+        let cmd = make_cmd(
+            "groundcover-cli",
+            &["sql-clickhouse", "INSERT INTO users VALUES (1)"],
+        );
+        let result = check_positional_sql_query(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_positional_sql_no_query_returns_none() {
+        let cmd = make_cmd("groundcover-cli", &["sql-clickhouse"]);
+        let result = check_positional_sql_query(&cmd);
+        assert!(result.is_none());
     }
 
     #[test]

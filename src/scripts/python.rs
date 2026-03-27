@@ -170,7 +170,27 @@ fn is_readonly_python(code: &str) -> bool {
             continue;
         }
 
-        if code_lower.contains(&pattern_lower) {
+        // For builtin function patterns like eval(, exec(, compile( — only match
+        // standalone calls, not method calls (re.compile) or longer names (literal_eval)
+        if pattern.ends_with('(') {
+            let mut search_from = 0;
+            let mut found_bare = false;
+            while let Some(idx) = code_lower[search_from..].find(&pattern_lower) {
+                let abs_idx = search_from + idx;
+                let is_start = abs_idx == 0 || {
+                    let prev = code_lower.as_bytes()[abs_idx - 1];
+                    !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'.'
+                };
+                if is_start {
+                    found_bare = true;
+                    break;
+                }
+                search_from = abs_idx + pattern_lower.len();
+            }
+            if found_bare {
+                return false;
+            }
+        } else if code_lower.contains(&pattern_lower) {
             return false;
         }
     }
@@ -616,5 +636,35 @@ mod tests {
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_re_compile_allowed() {
+        // re.compile() should not be flagged as dangerous compile()
+        let cmd = make_cmd(
+            "python",
+            &[
+                "-u",
+                "-c",
+                "import sys,time,re; s=time.monotonic(); pat=re.compile(r'test'); [sys.stdout.write(f'{time.monotonic()-s:.3f} {l}') for l in sys.stdin if pat.search(l)]",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_bare_compile_still_asks() {
+        let cmd = make_cmd("python3", &["-c", "compile('print(1)', '<string>', 'exec')"]);
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_ast_literal_eval_allowed() {
+        // ast.literal_eval() should not be flagged as dangerous eval()
+        let cmd = make_cmd("python3", &["-c", "import ast; ast.literal_eval('[1,2,3]')"]);
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 }

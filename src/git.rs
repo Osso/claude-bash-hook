@@ -70,7 +70,6 @@ pub fn check_git_push(
     config: &Config,
     cwd: Option<&str>,
 ) -> Option<PermissionResult> {
-    // Only handle git push
     if cmd.name != "git" || cmd.args.first().map(|s| s.as_str()) != Some("push") {
         return None;
     }
@@ -79,60 +78,70 @@ pub fn check_git_push(
     let has_force_with_lease = cmd.args.iter().any(|a| a == "--force-with-lease");
     let target_branch = get_push_target_branch(cmd);
 
-    let is_protected = target_branch
-        .as_ref()
-        .is_some_and(|b| PROTECTED_BRANCHES.contains(&b.as_str()));
+    if has_dangerous_force {
+        return check_force_push(&target_branch);
+    }
 
-    // Force push to protected branch - always deny
-    if has_dangerous_force && is_protected {
-        return Some(PermissionResult {
+    if is_protected_branch(&target_branch) {
+        return Some(check_protected_push(&target_branch, has_force_with_lease, config, cwd));
+    }
+
+    Some(PermissionResult {
+        permission: Permission::Allow,
+        reason: "git push".to_string(),
+        suggestion: None,
+    })
+}
+
+fn is_protected_branch(branch: &Option<String>) -> bool {
+    branch
+        .as_ref()
+        .is_some_and(|b| PROTECTED_BRANCHES.contains(&b.as_str()))
+}
+
+fn check_force_push(target_branch: &Option<String>) -> Option<PermissionResult> {
+    if is_protected_branch(target_branch) {
+        Some(PermissionResult {
             permission: Permission::Deny,
             reason: format!(
                 "force push to protected branch '{}'",
                 target_branch.as_deref().unwrap_or("unknown")
             ),
             suggestion: None,
-        });
-    }
-
-    // Force push to non-protected branch - ask
-    if has_dangerous_force {
-        return Some(PermissionResult {
+        })
+    } else {
+        Some(PermissionResult {
             permission: Permission::Ask,
             reason: "force push".to_string(),
             suggestion: Some("Consider using --force-with-lease for safer force push".to_string()),
-        });
+        })
     }
+}
 
-    if is_protected {
-        // Check if this directory is allowed to push to master
-        let branch = target_branch.as_deref().unwrap_or("unknown");
-        if config.is_master_push_allowed(cwd) {
-            return Some(PermissionResult {
-                permission: Permission::Allow,
-                reason: format!("push to '{}' (allowed directory)", branch),
-                suggestion: None,
-            });
-        }
-
-        let reason = if has_force_with_lease {
-            format!("force push to protected branch '{}'", branch)
-        } else {
-            format!("push to protected branch '{}'", branch)
-        };
-        return Some(PermissionResult {
-            permission: Permission::Ask,
-            reason,
+fn check_protected_push(
+    target_branch: &Option<String>,
+    has_force_with_lease: bool,
+    config: &Config,
+    cwd: Option<&str>,
+) -> PermissionResult {
+    let branch = target_branch.as_deref().unwrap_or("unknown");
+    if config.is_master_push_allowed(cwd) {
+        return PermissionResult {
+            permission: Permission::Allow,
+            reason: format!("push to '{}' (allowed directory)", branch),
             suggestion: None,
-        });
+        };
     }
-
-    // Allow push (including --force-with-lease) to non-protected branches
-    Some(PermissionResult {
-        permission: Permission::Allow,
-        reason: "git push".to_string(),
+    let reason = if has_force_with_lease {
+        format!("force push to protected branch '{}'", branch)
+    } else {
+        format!("push to protected branch '{}'", branch)
+    };
+    PermissionResult {
+        permission: Permission::Ask,
+        reason,
         suggestion: None,
-    })
+    }
 }
 
 /// Try to determine the target branch for a git push
@@ -169,8 +178,40 @@ fn get_push_target_branch(cmd: &Command) -> Option<String> {
         return Some(branch.to_string());
     }
 
-    // If only remote or no args, check current branch
+    // No explicit branch — resolve where git would actually push
+    // This catches branches tracking origin/master
+    get_push_remote_branch()
+}
+
+/// Get the remote branch that `git push` would target.
+/// Resolves tracking config so we catch e.g. a feature branch tracking origin/master.
+fn get_push_remote_branch() -> Option<String> {
+    // @{push} is exactly where `git push` would go
+    if let Some(branch) = resolve_remote_ref("@{push}") {
+        return Some(branch);
+    }
+    // Fall back to @{upstream}
+    if let Some(branch) = resolve_remote_ref("@{upstream}") {
+        return Some(branch);
+    }
+    // No tracking — git will push to a remote branch matching the local name
     get_current_branch()
+}
+
+/// Resolve a remote ref like @{push} or @{upstream} to its branch name
+fn resolve_remote_ref(refspec: &str) -> Option<String> {
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "--abbrev-ref", refspec])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let full_ref = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Output is "origin/master" — extract branch after first "/"
+    let pos = full_ref.find('/')?;
+    let branch = &full_ref[pos + 1..];
+    if branch.is_empty() { None } else { Some(branch.to_string()) }
 }
 
 /// Get the current git branch
@@ -179,14 +220,11 @@ fn get_current_branch() -> Option<String> {
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .ok()?;
-
-    if output.status.success() {
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !branch.is_empty() && branch != "HEAD" {
-            return Some(branch);
-        }
+    if !output.status.success() {
+        return None;
     }
-    None
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !branch.is_empty() && branch != "HEAD" { Some(branch) } else { None }
 }
 
 #[cfg(test)]
