@@ -76,9 +76,10 @@ struct HookEvent {
 
 impl HookInput {
     pub(crate) fn access_mode(&self) -> Option<&str> {
-        self.access_mode
-            .as_deref()
-            .or(self.hook_event.as_ref().and_then(|event| event.access_mode.as_deref()))
+        self.access_mode.as_deref().or(self
+            .hook_event
+            .as_ref()
+            .and_then(|event| event.access_mode.as_deref()))
     }
 }
 
@@ -276,12 +277,19 @@ fn analyze_and_resolve(
 ) -> Option<PermissionResult> {
     let ctx = ExecContext {
         edit_mode: edits_allowed(hook_input.permission_mode.as_deref()),
-        is_subagent: hook_input.session_id.as_deref()
+        is_subagent: hook_input
+            .session_id
+            .as_deref()
             .is_some_and(|sid| subagent_tracker::has_active_subagents(sid)),
     };
     let access_mode = hook_input.access_mode().map(str::to_string);
     let result = if is_nushell {
-        analysis::analyze_nushell_command(command, config, ctx, hook_input.tool_input.cwd.as_deref())
+        analysis::analyze_nushell_command(
+            command,
+            config,
+            ctx,
+            hook_input.tool_input.cwd.as_deref(),
+        )
     } else {
         analysis::analyze_command(command, config, ctx, hook_input.cwd.as_deref())
     };
@@ -297,7 +305,9 @@ fn main() {
         return;
     }
 
-    let is_subagent = hook_input.session_id.as_deref()
+    let is_subagent = hook_input
+        .session_id
+        .as_deref()
         .is_some_and(|sid| subagent_tracker::has_active_subagents(sid));
     let config = Config::load_or_default();
 
@@ -315,13 +325,19 @@ fn main() {
     };
 
     let Some(result) = analyze_and_resolve(&hook_input, &config, command, is_nushell) else {
-        info!("decision=passthrough session={:?} command={:?}", hook_input.session_id, command);
+        info!(
+            "decision=passthrough session={:?} command={:?}",
+            hook_input.session_id, command
+        );
         return;
     };
 
     info!(
         "decision={} session={:?} command={:?} reason={:?}",
-        permission_name(result.permission), hook_input.session_id, command, result.reason
+        permission_name(result.permission),
+        hook_input.session_id,
+        command,
+        result.reason
     );
     emit_decision(command, &result, &config);
 }

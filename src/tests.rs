@@ -1,5 +1,5 @@
 use crate::config::{Config, ExecContext, Permission};
-use crate::{analyze_command, apply_access_mode_permission, check_write_path, HookInput};
+use crate::{HookInput, analyze_command, apply_access_mode_permission, check_write_path};
 use serde_json::json;
 use std::path::Path;
 
