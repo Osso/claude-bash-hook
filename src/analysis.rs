@@ -49,8 +49,15 @@ pub fn analyze_with_piped_query(
         let local_piped_query = extract_piped_query(prev_cmd);
         let piped_query = local_piped_query.as_deref().or(outer_piped_query);
         let result = check_single_command(
-            cmd, config, ctx, virtual_cwd.as_deref(), initial_cwd,
-            has_uncertain_flow, piped_query, Some(command), is_remote,
+            cmd,
+            config,
+            ctx,
+            virtual_cwd.as_deref(),
+            initial_cwd,
+            has_uncertain_flow,
+            piped_query,
+            Some(command),
+            is_remote,
         );
         most_restrictive = Some(merge_restrictive(most_restrictive, result));
         update_virtual_cwd(&mut virtual_cwd, cmd, has_uncertain_flow);
@@ -72,7 +79,10 @@ pub fn analyze_nushell_command(
     if !analysis.success {
         return PermissionResult {
             permission: Permission::Deny,
-            reason: format!("Nushell syntax error: {}", analysis.error.unwrap_or_default()),
+            reason: format!(
+                "Nushell syntax error: {}",
+                analysis.error.unwrap_or_default()
+            ),
             suggestion: Some("Fix the syntax error and try again".to_string()),
         };
     }
@@ -98,7 +108,10 @@ fn check_analysis_errors(analysis: &analyzer::AnalysisResult) -> Option<Permissi
     if !analysis.success {
         return Some(PermissionResult {
             permission: Permission::Deny,
-            reason: format!("Bash syntax error: {}", analysis.error.as_deref().unwrap_or_default()),
+            reason: format!(
+                "Bash syntax error: {}",
+                analysis.error.as_deref().unwrap_or_default()
+            ),
             suggestion: Some("Fix the syntax error and try again".to_string()),
         });
     }
@@ -228,12 +241,22 @@ fn check_wrapper(
         let inner_result = if unwrap_result.wrapper == "nu" {
             analyze_nushell_command(inner, config, ctx, virtual_cwd)
         } else {
-            analyze_with_piped_query(inner, config, ctx, virtual_cwd, piped_query, inner_is_remote)
+            analyze_with_piped_query(
+                inner,
+                config,
+                ctx,
+                virtual_cwd,
+                piped_query,
+                inner_is_remote,
+            )
         };
 
         if unwrap_result.host.is_some() {
             let host_result = config.check_command_with_host(
-                &cmd.name, &cmd.args, unwrap_result.host.as_deref(), ctx,
+                &cmd.name,
+                &cmd.args,
+                unwrap_result.host.as_deref(),
+                ctx,
             );
             if host_result.permission > inner_result.permission {
                 return Some(host_result);
@@ -244,7 +267,10 @@ fn check_wrapper(
 
     if unwrap_result.host.is_some() {
         return Some(config.check_command_with_host(
-            &cmd.name, &cmd.args, unwrap_result.host.as_deref(), ctx,
+            &cmd.name,
+            &cmd.args,
+            unwrap_result.host.as_deref(),
+            ctx,
         ));
     }
 
@@ -261,9 +287,10 @@ fn check_inplace_edit(cmd: &analyzer::Command) -> Option<PermissionResult> {
         });
     }
     if cmd.name == "perl"
-        && cmd.args.iter().any(|a| {
-            a.starts_with('-') && !a.starts_with("--") && a.contains('i')
-        })
+        && cmd
+            .args
+            .iter()
+            .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('i'))
     {
         return Some(PermissionResult {
             permission: Permission::Deny,
@@ -328,7 +355,11 @@ fn check_database(
             return Some(sql::check_piped_query(query));
         }
     }
-    if cmd.args.first().is_some_and(|sub| config.is_positional_sql_command(&cmd.name, sub)) {
+    if cmd
+        .args
+        .first()
+        .is_some_and(|sub| config.is_positional_sql_command(&cmd.name, sub))
+    {
         if let Some(result) = sql::check_positional_sql_query(cmd) {
             return Some(result);
         }
@@ -433,14 +464,22 @@ fn check_misc(
             return Some(result);
         }
     }
-    if cmd.args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
+    if cmd
+        .args
+        .iter()
+        .any(|a| a == "--help" || a == "-h" || a == "help")
+    {
         return Some(PermissionResult {
             permission: Permission::Allow,
             reason: "help request".to_string(),
             suggestion: None,
         });
     }
-    if cmd.args.iter().any(|a| a == "--version" || a == "-V" || a == "version") {
+    if cmd
+        .args
+        .iter()
+        .any(|a| a == "--version" || a == "-V" || a == "version")
+    {
         return Some(PermissionResult {
             permission: Permission::Allow,
             reason: "version check".to_string(),

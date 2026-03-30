@@ -55,9 +55,25 @@ fn strip_sql_comments(query: &str) -> String {
 
 /// Read-only SQL statement prefixes (SQL keywords and SQLite3 dot commands)
 const READ_ONLY_PREFIXES: &[&str] = &[
-    "SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "USE", "PRAGMA",
-    ".SCHEMA", ".TABLES", ".INDICES", ".INDEXES", ".DUMP",
-    ".MODE", ".HEADERS", ".SEPARATOR", ".WIDTH", ".PRINT", ".SHOW", ".DATABASES",
+    "SELECT",
+    "SHOW",
+    "DESCRIBE",
+    "DESC",
+    "EXPLAIN",
+    "USE",
+    "PRAGMA",
+    ".SCHEMA",
+    ".TABLES",
+    ".INDICES",
+    ".INDEXES",
+    ".DUMP",
+    ".MODE",
+    ".HEADERS",
+    ".SEPARATOR",
+    ".WIDTH",
+    ".PRINT",
+    ".SHOW",
+    ".DATABASES",
 ];
 
 /// Check if a single SQL statement (no semicolons) is read-only
@@ -457,7 +473,10 @@ mod tests {
 
     #[test]
     fn test_positional_sql_select_allowed() {
-        let cmd = make_cmd("groundcover-cli", &["sql-clickhouse", "SELECT * FROM users"]);
+        let cmd = make_cmd(
+            "groundcover-cli",
+            &["sql-clickhouse", "SELECT * FROM users"],
+        );
         let result = check_positional_sql_query(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }

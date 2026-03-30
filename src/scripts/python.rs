@@ -6,11 +6,45 @@ use regex::Regex;
 
 /// Safe modules for __import__() calls. Anything not listed here triggers "ask".
 const SAFE_IMPORT_MODULES: &[&str] = &[
-    "os", "sys", "json", "struct", "re", "math", "collections", "itertools", "functools",
-    "datetime", "time", "hashlib", "base64", "binascii", "codecs", "csv", "string",
-    "textwrap", "difflib", "pathlib", "glob", "fnmatch", "stat", "posixpath", "ntpath",
-    "io", "abc", "copy", "pprint", "decimal", "fractions", "random", "bisect", "heapq",
-    "enum", "dataclasses", "typing", "operator", "contextlib",
+    "os",
+    "sys",
+    "json",
+    "struct",
+    "re",
+    "math",
+    "collections",
+    "itertools",
+    "functools",
+    "datetime",
+    "time",
+    "hashlib",
+    "base64",
+    "binascii",
+    "codecs",
+    "csv",
+    "string",
+    "textwrap",
+    "difflib",
+    "pathlib",
+    "glob",
+    "fnmatch",
+    "stat",
+    "posixpath",
+    "ntpath",
+    "io",
+    "abc",
+    "copy",
+    "pprint",
+    "decimal",
+    "fractions",
+    "random",
+    "bisect",
+    "heapq",
+    "enum",
+    "dataclasses",
+    "typing",
+    "operator",
+    "contextlib",
 ];
 
 /// Dangerous Python functions/modules that have side effects
@@ -602,7 +636,10 @@ mod tests {
     fn test_dunder_import_safe_module_allowed() {
         let cmd = make_cmd(
             "python3",
-            &["-c", "size = __import__('os').path.getsize('/tmp/foo'); print(size)"],
+            &[
+                "-c",
+                "size = __import__('os').path.getsize('/tmp/foo'); print(size)",
+            ],
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
@@ -620,20 +657,14 @@ mod tests {
 
     #[test]
     fn test_dunder_import_subprocess_asks() {
-        let cmd = make_cmd(
-            "python3",
-            &["-c", "__import__('subprocess').run(['ls'])"],
-        );
+        let cmd = make_cmd("python3", &["-c", "__import__('subprocess').run(['ls'])"]);
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]
     fn test_dunder_import_unknown_module_asks() {
-        let cmd = make_cmd(
-            "python3",
-            &["-c", "__import__('ctypes').cdll"],
-        );
+        let cmd = make_cmd("python3", &["-c", "__import__('ctypes').cdll"]);
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
@@ -655,7 +686,10 @@ mod tests {
 
     #[test]
     fn test_bare_compile_still_asks() {
-        let cmd = make_cmd("python3", &["-c", "compile('print(1)', '<string>', 'exec')"]);
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "compile('print(1)', '<string>', 'exec')"],
+        );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
@@ -663,7 +697,10 @@ mod tests {
     #[test]
     fn test_ast_literal_eval_allowed() {
         // ast.literal_eval() should not be flagged as dangerous eval()
-        let cmd = make_cmd("python3", &["-c", "import ast; ast.literal_eval('[1,2,3]')"]);
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import ast; ast.literal_eval('[1,2,3]')"],
+        );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }

@@ -83,7 +83,12 @@ pub fn check_git_push(
     }
 
     if is_protected_branch(&target_branch) {
-        return Some(check_protected_push(&target_branch, has_force_with_lease, config, cwd));
+        return Some(check_protected_push(
+            &target_branch,
+            has_force_with_lease,
+            config,
+            cwd,
+        ));
     }
 
     Some(PermissionResult {
@@ -211,7 +216,11 @@ fn resolve_remote_ref(refspec: &str) -> Option<String> {
     // Output is "origin/master" — extract branch after first "/"
     let pos = full_ref.find('/')?;
     let branch = &full_ref[pos + 1..];
-    if branch.is_empty() { None } else { Some(branch.to_string()) }
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
 }
 
 /// Get the current git branch
@@ -224,7 +233,11 @@ fn get_current_branch() -> Option<String> {
         return None;
     }
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !branch.is_empty() && branch != "HEAD" { Some(branch) } else { None }
+    if !branch.is_empty() && branch != "HEAD" {
+        Some(branch)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

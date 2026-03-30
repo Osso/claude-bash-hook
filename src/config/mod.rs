@@ -348,7 +348,9 @@ impl Config {
     /// Check if a command+subcommand pair is a positional SQL command
     pub fn is_positional_sql_command(&self, name: &str, subcommand: &str) -> bool {
         let key = format!("{} {}", name, subcommand);
-        self.positional_sql_commands.iter().any(|entry| entry == &key)
+        self.positional_sql_commands
+            .iter()
+            .any(|entry| entry == &key)
     }
 
     /// Check if a file path is allowed for main thread writes
