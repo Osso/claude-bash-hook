@@ -161,12 +161,7 @@ struct HookSpecificOutput {
 
 /// Check if a Write tool path should be blocked
 pub(crate) fn check_write_path(path: &str) -> Option<(&'static str, String)> {
-    if path.starts_with("/tmp/") && !path.starts_with("/tmp/claude/") {
-        return Some((
-            "block",
-            format!("Use /tmp/claude/ instead of /tmp/ for: {}", path),
-        ));
-    }
+    let _ = path;
     None
 }
 

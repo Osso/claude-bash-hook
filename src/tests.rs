@@ -359,19 +359,15 @@ fn test_cwd_propagates_through_wrapper() {
 
 // Write path tests
 #[test]
-fn test_write_tmp_blocked() {
+fn test_write_tmp_allowed() {
     let result = check_write_path("/tmp/test.txt");
-    assert!(result.is_some());
-    let (decision, _) = result.unwrap();
-    assert_eq!(decision, "block");
+    assert!(result.is_none());
 }
 
 #[test]
-fn test_write_tmp_subdir_blocked() {
+fn test_write_tmp_subdir_allowed() {
     let result = check_write_path("/tmp/foo/bar.txt");
-    assert!(result.is_some());
-    let (decision, _) = result.unwrap();
-    assert_eq!(decision, "block");
+    assert!(result.is_none());
 }
 
 #[test]
@@ -471,6 +467,57 @@ fn test_piped_show_allowed() {
     let config = test_config();
     let result = analyze_command(
         "echo 'SHOW DATABASES' | mariadb",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+// Positional SQL command tests (e.g., groundcover-cli sql-clickhouse "SELECT ...")
+
+#[test]
+fn test_positional_sql_select_allowed() {
+    let toml = r#"
+        positional_sql_commands = ["groundcover-cli sql-clickhouse"]
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+    let result = analyze_command(
+        r#"groundcover-cli sql-clickhouse "SELECT count(*) FROM logs""#,
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_positional_sql_insert_asks() {
+    let toml = r#"
+        positional_sql_commands = ["groundcover-cli sql-clickhouse"]
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+    let result = analyze_command(
+        r#"groundcover-cli sql-clickhouse "INSERT INTO logs VALUES (1)""#,
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_positional_sql_piped_allowed() {
+    let toml = r#"
+        positional_sql_commands = ["groundcover-cli sql-clickhouse"]
+        [[rules]]
+        commands = ["head"]
+        permission = "allow"
+        reason = "read-only"
+    "#;
+    let config: Config = toml::from_str(toml).unwrap();
+    let result = analyze_command(
+        r#"groundcover-cli sql-clickhouse "SELECT toStartOfMinute(Timestamp) as minute, count(*) FROM logs GROUP BY minute" | head -30"#,
         &config,
         ExecContext::default(),
         None,
