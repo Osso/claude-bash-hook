@@ -473,4 +473,55 @@ mod tests {
             "All commands should be safe builtins"
         );
     }
+
+    #[test]
+    fn test_mv_builtin_is_extracted() {
+        let result = analyze("mv old.txt new.txt");
+        assert!(result.success);
+        assert_eq!(result.commands.len(), 1);
+        assert_eq!(result.commands[0].name, "mv");
+        assert_eq!(result.commands[0].args, vec!["old.txt", "new.txt"]);
+    }
+
+    #[test]
+    fn test_nested_external_commands_in_list_and_record() {
+        let result = analyze("[(^git status) {cmd: (^grep foo)}]");
+        assert!(result.success);
+        assert!(
+            result.commands.is_empty(),
+            "Nested structured expressions should not fabricate top-level commands"
+        );
+    }
+
+    #[test]
+    fn test_span_to_string_handles_invalid_ranges() {
+        let source = b"hello";
+        assert_eq!(span_to_string(Span::new(0, 5), source), "hello");
+        assert_eq!(span_to_string(Span::new(5, 5), source), "");
+        assert_eq!(span_to_string(Span::new(6, 7), source), "");
+    }
+
+    #[test]
+    fn test_is_real_parse_error_filters_known_noise() {
+        assert!(!is_real_parse_error(&"Unknown state in parser"));
+        assert!(!is_real_parse_error(&"Variable not found: foo"));
+        assert!(!is_real_parse_error(&"IncompatiblePathAccess"));
+        assert!(is_real_parse_error(&"expected closing delimiter"));
+    }
+
+    #[test]
+    fn test_parse_result_builders() {
+        let success = parse_success_result(vec![Command {
+            name: "git".to_string(),
+            args: vec!["status".to_string()],
+        }]);
+        assert!(success.success);
+        assert!(success.error.is_none());
+        assert_eq!(success.commands.len(), 1);
+
+        let failure = parse_error_result("broken".to_string());
+        assert!(!failure.success);
+        assert_eq!(failure.error.as_deref(), Some("broken"));
+        assert!(failure.commands.is_empty());
+    }
 }

@@ -1,7 +1,8 @@
 use crate::config::{Config, Permission};
 use crate::{
     HookInput, analyze_and_resolve, apply_access_mode_permission, apply_access_mode_result,
-    build_reason, edits_allowed, handle_subagent_event, permission_name, resolve_passthrough,
+    build_hook_output, build_reason, edits_allowed, handle_subagent_event, parse_hook_input,
+    permission_name, resolve_passthrough, serialize_hook_output,
 };
 use serde_json::json;
 use std::path::Path;
@@ -246,4 +247,47 @@ fn test_analyze_and_resolve_upgrades_passthrough_in_nushell() {
     let result =
         analyze_and_resolve(&hook_input, &config, "rm -rf /", true).expect("nushell result");
     assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_parse_hook_input_success() {
+    let input = parse_hook_input(r#"{"tool_name":"Bash","tool_input":{"command":"ls -la"}}"#)
+        .expect("hook input");
+    assert_eq!(input.tool_name, "Bash");
+    assert_eq!(input.tool_input.command.as_deref(), Some("ls -la"));
+}
+
+#[test]
+fn test_parse_hook_input_reports_json_error() {
+    let error = parse_hook_input("{not json").expect_err("invalid json should fail");
+    assert!(error.contains("key"));
+}
+
+#[test]
+fn test_build_hook_output_uses_expected_shape() {
+    let output = build_hook_output("allow", "safe", Some(json!({"command": "rtk git status"})));
+    assert_eq!(output.hook_output.event_name, "PreToolUse");
+    assert_eq!(output.hook_output.decision, "allow");
+    assert_eq!(output.hook_output.reason, "safe");
+    assert_eq!(
+        output.hook_output.updated_input,
+        Some(json!({"command": "rtk git status"}))
+    );
+}
+
+#[test]
+fn test_serialize_hook_output_includes_updated_input() {
+    let json = serialize_hook_output(
+        "ask",
+        "needs review",
+        Some(json!({"command": "rtk git status"})),
+    )
+    .expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
+    assert_eq!(value["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "ask");
+    assert_eq!(
+        value["hookSpecificOutput"]["updatedInput"]["command"],
+        "rtk git status"
+    );
 }

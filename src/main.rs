@@ -168,17 +168,32 @@ pub(crate) fn check_write_path(path: &str) -> Option<(&'static str, String)> {
     None
 }
 
-/// Output a hook decision, optionally with a rewritten command
-fn output_decision(decision: &str, reason: &str, updated_input: Option<serde_json::Value>) {
-    let output = HookOutput {
+fn build_hook_output(
+    decision: &str,
+    reason: &str,
+    updated_input: Option<serde_json::Value>,
+) -> HookOutput {
+    HookOutput {
         hook_output: HookSpecificOutput {
             event_name: "PreToolUse".to_string(),
             decision: decision.to_string(),
             reason: reason.to_string(),
             updated_input,
         },
-    };
-    if let Ok(json) = serde_json::to_string(&output) {
+    }
+}
+
+fn serialize_hook_output(
+    decision: &str,
+    reason: &str,
+    updated_input: Option<serde_json::Value>,
+) -> Option<String> {
+    serde_json::to_string(&build_hook_output(decision, reason, updated_input)).ok()
+}
+
+/// Output a hook decision, optionally with a rewritten command
+fn output_decision(decision: &str, reason: &str, updated_input: Option<serde_json::Value>) {
+    if let Some(json) = serialize_hook_output(decision, reason, updated_input) {
         println!("{}", json);
     }
 }
@@ -198,13 +213,17 @@ fn read_hook_input() -> HookInput {
         eprintln!("Failed to read stdin: {}", e);
         std::process::exit(1);
     }
-    match serde_json::from_str(&input) {
+    match parse_hook_input(&input) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("Failed to parse input: {}", e);
             std::process::exit(1);
         }
     }
+}
+
+fn parse_hook_input(input: &str) -> Result<HookInput, String> {
+    serde_json::from_str(input).map_err(|e| e.to_string())
 }
 
 fn handle_subagent_event(hook_input: &HookInput) -> bool {

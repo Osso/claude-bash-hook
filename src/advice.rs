@@ -37,7 +37,11 @@ fn build_prompt(command: &str, reason: &str, permission: &str) -> String {
 }
 
 fn spawn_claude_safe(prompt: &str) -> Option<std::process::Child> {
-    Command::new("claude-safe")
+    spawn_claude_command("claude-safe", prompt)
+}
+
+fn spawn_claude_command(binary: &str, prompt: &str) -> Option<std::process::Child> {
+    Command::new(binary)
         .args(["-p", &prompt, "--model", "haiku"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -46,13 +50,20 @@ fn spawn_claude_safe(prompt: &str) -> Option<std::process::Child> {
 }
 
 fn wait_for_child(child: &mut std::process::Child) -> Option<()> {
-    let timeout = Duration::from_secs(10);
+    wait_for_child_with_timeout(child, Duration::from_secs(10), Duration::from_millis(100))
+}
+
+fn wait_for_child_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Option<()> {
     let start = Instant::now();
 
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) if start.elapsed() < timeout => std::thread::sleep(poll_interval),
             _ => {
                 let _ = child.kill();
                 return None;
@@ -110,6 +121,24 @@ mod tests {
             .spawn()
             .expect("spawn shell");
         assert_eq!(wait_for_child(&mut child), Some(()));
+    }
+
+    #[test]
+    fn test_spawn_claude_command_returns_none_for_missing_binary() {
+        assert!(spawn_claude_command("/definitely/missing/claude-safe", "prompt").is_none());
+    }
+
+    #[test]
+    fn test_wait_for_child_times_out() {
+        let mut child = ProcessCommand::new("sh")
+            .args(["-c", "sleep 1"])
+            .spawn()
+            .expect("spawn shell");
+        assert_eq!(
+            wait_for_child_with_timeout(&mut child, Duration::ZERO, Duration::from_millis(1)),
+            None
+        );
+        let _ = child.wait();
     }
 
     #[test]
