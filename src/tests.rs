@@ -1,6 +1,5 @@
 use crate::config::{Config, ExecContext, Permission};
-use crate::{HookInput, analyze_command, apply_access_mode_permission, check_write_path};
-use serde_json::json;
+use crate::{analyze_command, check_write_path};
 use std::path::Path;
 
 fn test_config() -> Config {
@@ -250,37 +249,6 @@ fn test_perl_pie_denied() {
         None,
     );
     assert_eq!(result.permission, Permission::Deny);
-}
-
-#[test]
-fn test_hook_input_reads_access_mode_from_codex_hook_event() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls -la" },
-        "hook_event": {
-            "event_type": "pre_tool_use",
-            "access_mode": "full_access"
-        }
-    }))
-    .expect("codex hook payload should deserialize");
-
-    assert_eq!(input.access_mode(), Some("full_access"));
-}
-
-#[test]
-fn test_full_access_upgrades_ask_to_allow() {
-    assert_eq!(
-        apply_access_mode_permission(Permission::Ask, Some("full_access")),
-        Permission::Allow
-    );
-}
-
-#[test]
-fn test_supervised_upgrades_passthrough_to_ask() {
-    assert_eq!(
-        apply_access_mode_permission(Permission::Passthrough, Some("supervised")),
-        Permission::Ask
-    );
 }
 
 #[test]

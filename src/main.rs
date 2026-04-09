@@ -345,4 +345,6 @@ fn main() {
 }
 
 #[cfg(test)]
+mod access_mode_tests;
+#[cfg(test)]
 mod tests;

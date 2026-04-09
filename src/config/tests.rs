@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 use std::path::Path;
 
 /// Test helper trait to add convenience methods
@@ -417,6 +418,175 @@ fn test_rule_opts_with_args() {
     // Same with long form
     let result = config.check_command("mycli", &["--slug".into(), "gc".into(), "issues".into()]);
     assert_eq!(result.permission, Permission::Allow);
+}
+
+fn unique_temp_dir(name: &str) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "claude-bash-hook-{}-{}-{}",
+        name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&path).expect("create temp dir");
+    path.to_string_lossy().to_string()
+}
+
+#[test]
+fn test_rewrite_command_uses_longest_matching_prefix() {
+    let config: Config = toml::from_str(
+        r#"
+        [rewrite]
+        enabled = true
+        binary = "rtk"
+        prefixes = ["git", "git status"]
+    "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.rewrite_command("git status --short"),
+        Some("rtk git status --short".to_string())
+    );
+}
+
+#[test]
+fn test_rewrite_command_skips_compound_and_already_rewritten() {
+    let config: Config = toml::from_str(
+        r#"
+        [rewrite]
+        enabled = true
+        binary = "rtk"
+        prefixes = ["git"]
+    "#,
+    )
+    .unwrap();
+
+    assert_eq!(config.rewrite_command("git status && git diff"), None);
+    assert_eq!(config.rewrite_command("rtk git status"), None);
+}
+
+#[test]
+fn test_is_main_thread_write_allowed_exact_and_child_match() {
+    let config: Config = toml::from_str(
+        r#"
+        main_thread_write_allow = ["/tmp/exact.txt", "/tmp/dir/*"]
+    "#,
+    )
+    .unwrap();
+
+    assert!(config.is_main_thread_write_allowed("/tmp/exact.txt"));
+    assert!(config.is_main_thread_write_allowed("/tmp/dir/file.txt"));
+    assert!(config.is_main_thread_write_allowed("/tmp/dir/nested/file.txt"));
+    assert!(!config.is_main_thread_write_allowed("/tmp/other.txt"));
+}
+
+#[test]
+fn test_is_main_thread_write_allowed_expands_home() {
+    let home = std::env::var("HOME").expect("home");
+    let config: Config = toml::from_str(r#"main_thread_write_allow = ["~/allowed/*"]"#).unwrap();
+    assert!(config.is_main_thread_write_allowed(&format!("{}/allowed/file.txt", home)));
+}
+
+#[test]
+fn test_is_master_push_allowed_for_exact_and_subdir() {
+    let root = unique_temp_dir("master-push");
+    let subdir = format!("{}/nested", root);
+    fs::create_dir_all(&subdir).unwrap();
+
+    let config: Config = toml::from_str(&format!(r#"master_push_allowed = ["{}"]"#, root)).unwrap();
+
+    assert!(config.is_master_push_allowed(Some(&root)));
+    assert!(config.is_master_push_allowed(Some(&subdir)));
+    assert!(!config.is_master_push_allowed(Some("/tmp/somewhere-else")));
+}
+
+#[test]
+fn test_load_invalid_config_returns_error() {
+    let dir = unique_temp_dir("invalid-config");
+    let path = Path::new(&dir).join("config.toml");
+    fs::write(&path, "not = [valid").unwrap();
+
+    let error = Config::load(&path).expect_err("invalid TOML should fail");
+    assert!(error.contains("Failed to parse config"));
+}
+
+#[test]
+fn test_rule_effective_permission_prefers_context_specific_overrides() {
+    let rule: Rule = toml::from_str(
+        r#"
+        commands = ["git status"]
+        permission = "ask"
+        edit_mode_permission = "allow"
+        subagent_permission = "deny"
+    "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        rule.effective_permission(ExecContext {
+            edit_mode: false,
+            is_subagent: false,
+        }),
+        "ask"
+    );
+    assert_eq!(
+        rule.effective_permission(ExecContext {
+            edit_mode: true,
+            is_subagent: false,
+        }),
+        "allow"
+    );
+    assert_eq!(
+        rule.effective_permission(ExecContext {
+            edit_mode: true,
+            is_subagent: true,
+        }),
+        "deny"
+    );
+}
+
+#[test]
+fn test_config_helpers_cover_wrappers_aliases_and_paths() {
+    let config: Config = toml::from_str(
+        r#"
+        mysql_aliases = ["mysql", "mydb"]
+        positional_sql_commands = ["gc sql"]
+
+        [[wrappers]]
+        command = "sudo"
+        opts_with_args = ["-u"]
+    "#,
+    )
+    .unwrap();
+
+    let wrapper = config.get_wrapper("sudo").expect("wrapper");
+    assert_eq!(wrapper.command, "sudo");
+    assert_eq!(wrapper.opts_with_args, vec!["-u".to_string()]);
+    assert!(config.is_mysql_alias("mydb"));
+    assert!(!config.is_mysql_alias("psql"));
+    assert!(config.is_positional_sql_command("gc", "sql"));
+    assert!(!config.is_positional_sql_command("gc", "other"));
+    assert_eq!(path_prefix("/tmp/path"), "/tmp/path/");
+    assert_eq!(path_prefix("/tmp/path/"), "/tmp/path/");
+    assert!(is_same_or_child_path("/tmp/path/nested", "/tmp/path"));
+    assert!(!is_same_or_child_path("/tmp/other", "/tmp/path"));
+}
+
+#[test]
+fn test_expand_home_and_canonicalize_helpers() {
+    let home = std::env::var("HOME").expect("home");
+    assert_eq!(expand_home("~/project"), format!("{}/project", home));
+    assert_eq!(expand_home("/tmp/project"), "/tmp/project");
+
+    let dir = unique_temp_dir("canonicalize");
+    assert_eq!(canonicalize_for_match(&dir), Some(dir));
+    assert_eq!(
+        canonicalize_for_match("/path/that/should/not/exist"),
+        Some("/path/that/should/not/exist".to_string())
+    );
 }
 
 #[test]

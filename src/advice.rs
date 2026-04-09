@@ -75,3 +75,75 @@ fn read_child_output(child: &mut std::process::Child) -> Option<String> {
         Some(format!("AI advice: {}", trimmed))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command as ProcessCommand;
+
+    #[test]
+    fn test_permission_label_for_supported_permissions() {
+        assert_eq!(permission_label(&Permission::Ask), Some("ask"));
+        assert_eq!(permission_label(&Permission::Deny), Some("deny"));
+        assert_eq!(permission_label(&Permission::Allow), None);
+    }
+
+    #[test]
+    fn test_build_prompt_contains_core_fields() {
+        let prompt = build_prompt("rm -rf /tmp/x", "dangerous", "ask");
+        assert!(prompt.contains("Command: rm -rf /tmp/x"));
+        assert!(prompt.contains("Current decision: ask because: dangerous"));
+        assert!(prompt.contains("Allow: <reason>"));
+        assert!(prompt.contains("Deny: <reason>"));
+    }
+
+    #[test]
+    fn test_get_advice_returns_none_for_unsupported_permission() {
+        assert_eq!(get_advice("ls -la", "safe", &Permission::Allow), None);
+        assert_eq!(get_advice("ls -la", "safe", &Permission::Passthrough), None);
+    }
+
+    #[test]
+    fn test_wait_for_child_success() {
+        let mut child = ProcessCommand::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn shell");
+        assert_eq!(wait_for_child(&mut child), Some(()));
+    }
+
+    #[test]
+    fn test_read_child_output_returns_prefixed_text() {
+        let mut child = ProcessCommand::new("sh")
+            .args(["-c", "printf 'Allow: safe\\n'"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn shell");
+        let _ = child.wait();
+        assert_eq!(
+            read_child_output(&mut child),
+            Some("AI advice: Allow: safe".to_string())
+        );
+    }
+
+    #[test]
+    fn test_read_child_output_ignores_empty_stdout() {
+        let mut child = ProcessCommand::new("sh")
+            .args(["-c", "printf ''"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn shell");
+        let _ = child.wait();
+        assert_eq!(read_child_output(&mut child), None);
+    }
+
+    #[test]
+    fn test_read_child_output_requires_stdout_pipe() {
+        let mut child = ProcessCommand::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn shell");
+        let _ = child.wait();
+        assert_eq!(read_child_output(&mut child), None);
+    }
+}

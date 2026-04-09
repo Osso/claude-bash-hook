@@ -102,3 +102,119 @@ fn regex_replace_reason(edit_mode: bool, is_dry_run: bool, is_subagent: bool) ->
         "regex replace modifies files (not in edit mode)"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ToolInput;
+
+    fn hook_input(tool_name: &str) -> HookInput {
+        HookInput {
+            tool_name: tool_name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn config_with_main_thread_default(permission: &str) -> Config {
+        toml::from_str(&format!(r#"main_thread_default = "{}""#, permission)).expect("config")
+    }
+
+    impl Default for HookInput {
+        fn default() -> Self {
+            HookInput {
+                tool_name: String::new(),
+                tool_input: ToolInput::default(),
+                permission_mode: None,
+                access_mode: None,
+                cwd: None,
+                session_id: None,
+                hook_event_name: None,
+                hook_event: None,
+            }
+        }
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_returns_false_for_other_tools() {
+        let handled = handle_non_bash_tool(&hook_input("Bash"), &Config::default(), false);
+        assert!(!handled);
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_handles_regex_replace() {
+        let mut input = hook_input("mcp__regex-replace__regex_replace");
+        input.tool_input.dry_run = Some(true);
+        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_handles_write_edit() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
+        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_check_main_thread_block_denies_when_disabled() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
+        let config = config_with_main_thread_default("deny");
+        assert!(check_main_thread_block(&input, &config, false));
+    }
+
+    #[test]
+    fn test_check_main_thread_block_allows_whitelisted_path() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/tmp/allowed/file.txt".to_string());
+        let config: Config = toml::from_str(
+            r#"
+            main_thread_default = "deny"
+            main_thread_write_allow = ["/tmp/allowed/*"]
+        "#,
+        )
+        .expect("config");
+        assert!(!check_main_thread_block(&input, &config, false));
+    }
+
+    #[test]
+    fn test_check_main_thread_block_skips_for_subagent() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
+        let config = config_with_main_thread_default("deny");
+        assert!(!check_main_thread_block(&input, &config, true));
+    }
+
+    #[test]
+    fn test_check_main_thread_block_skips_when_default_not_restrictive() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
+        let config = config_with_main_thread_default("allow");
+        assert!(!check_main_thread_block(&input, &config, false));
+    }
+
+    #[test]
+    fn test_regex_replace_reason_variants() {
+        assert_eq!(
+            regex_replace_reason(false, true, false),
+            "regex replace (dry run)"
+        );
+        assert_eq!(
+            regex_replace_reason(false, false, true),
+            "regex replace (subagent)"
+        );
+        assert_eq!(
+            regex_replace_reason(true, false, false),
+            "regex replace (edit mode)"
+        );
+        assert_eq!(
+            regex_replace_reason(false, false, false),
+            "regex replace modifies files (not in edit mode)"
+        );
+    }
+
+    #[test]
+    fn test_handle_regex_replace_ask_path() {
+        let input = hook_input("mcp__regex-replace__regex_replace");
+        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+    }
+}
