@@ -2,6 +2,8 @@
 
 use super::*;
 
+const MAGICK_CROP_SIZE: &str = "100x100+0+0";
+
 #[test]
 fn test_edit_mode_permission() {
     let toml = r#"
@@ -20,7 +22,7 @@ fn test_edit_mode_permission() {
         &[
             "input.webp".into(),
             "-crop".into(),
-            "100x100+0+0".into(),
+            MAGICK_CROP_SIZE.into(),
             "output.png".into(),
         ],
         None,
@@ -34,7 +36,7 @@ fn test_edit_mode_permission() {
         &[
             "input.webp".into(),
             "-crop".into(),
-            "100x100+0+0".into(),
+            MAGICK_CROP_SIZE.into(),
             "output.png".into(),
         ],
         None,

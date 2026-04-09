@@ -148,7 +148,6 @@ mod tests {
         Command {
             name: "lua".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("lua {}", args.join(" ")),
         }
     }
 
@@ -156,7 +155,6 @@ mod tests {
         Command {
             name: "luajit".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("luajit {}", args.join(" ")),
         }
     }
 
@@ -331,7 +329,6 @@ mod tests {
         let cmd = Command {
             name: "python".to_string(),
             args: vec!["-c".to_string(), "print('hello')".to_string()],
-            text: "python -c print('hello')".to_string(),
         };
         let result = check_lua_script(&cmd);
         assert!(result.is_none());

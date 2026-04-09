@@ -92,47 +92,17 @@ impl Config {
         suggestion: Option<String>,
         ctx: ExecContext,
     ) -> Option<PermissionResult> {
-        // Check if main_thread_default is overriding (no explicit main_thread_permission on rule)
-        let main_thread_overriding = !ctx.is_subagent
-            && self.main_thread_default.is_some()
-            && rule.main_thread_permission.is_none();
-
-        let effective_perm = if !ctx.is_subagent && self.main_thread_default.is_some() {
-            rule.main_thread_permission
-                .as_deref()
-                .unwrap_or(self.main_thread_default.as_deref().unwrap())
-        } else {
-            rule.effective_permission(ctx)
-        };
+        let main_thread_overriding = self.rule_main_thread_override(rule, ctx);
+        let effective_perm = self.effective_rule_permission(rule, ctx);
 
         for pattern in &rule.commands {
-            let matched = if let Some(ref rule_cwd) = rule.cwd {
-                self.matches_pattern_with_path_resolution(
-                    pattern,
-                    name,
-                    args,
-                    cwd,
-                    rule_cwd,
-                    &rule.opts_with_args,
-                )
-            } else {
-                self.matches_pattern_with_cwd(pattern, name, args, cwd, &rule.opts_with_args)
-            };
-
-            if matched {
-                let (reason, suggestion) = if main_thread_overriding {
-                    (
-                        "main thread bash disabled".to_string(),
-                        Some("Use Task() to delegate bash commands to subagents".to_string()),
-                    )
-                } else {
-                    (rule.reason.clone(), suggestion)
-                };
-                return Some(PermissionResult {
-                    permission: self.parse_permission(effective_perm),
-                    reason,
+            if self.rule_matches_with_cwd(rule, pattern, name, args, cwd) {
+                return Some(self.rule_match_result(
+                    rule,
+                    effective_perm,
                     suggestion,
-                });
+                    main_thread_overriding,
+                ));
             }
         }
         None
@@ -149,137 +119,44 @@ impl Config {
         rule_cwd: &str,
         rule_opts: &[String],
     ) -> bool {
-        let cwd = match cwd {
-            Some(c) => c,
-            None => return false,
+        let Some(cwd) = cwd else {
+            return false;
         };
-
-        // Check if cwd is under rule_cwd (required for cwd-constrained rules)
         if !self.matches_cwd(rule_cwd, Some(cwd)) {
             return false;
         }
 
-        // Extract command part from pattern (first word)
-        let pattern_parts: Vec<&str> = pattern.split_whitespace().collect();
-        if pattern_parts.is_empty() {
+        let pattern_parts = self.pattern_parts(pattern);
+        let Some(pattern_cmd) = pattern_parts.first().copied() else {
             return false;
-        }
-        let pattern_cmd = pattern_parts[0];
+        };
 
-        // If pattern is a bare command (no path separators) and the command is also bare,
-        // skip path resolution. This handles global commands on PATH (e.g., "browser-cli")
-        // where cwd only restricts WHERE the command can be used, not WHERE the binary lives.
-        // Local scripts like "run-tests.sh" run from the project root, so when cwd differs
-        // from rule_cwd, path resolution correctly rejects them.
         if !pattern_cmd.contains('/') && !name.contains('/') {
             return self.matches_pattern(pattern, name, args, rule_opts);
         }
 
-        // Strip glob suffixes from rule_cwd for path resolution
-        let rule_cwd_base = rule_cwd
-            .strip_suffix("/**")
-            .or_else(|| rule_cwd.strip_suffix("/*"))
-            .unwrap_or(rule_cwd);
-
-        // Canonicalize paths to resolve symlinks
-        let rule_cwd_canonical = std::path::Path::new(rule_cwd_base)
-            .canonicalize()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| rule_cwd_base.to_string());
-        let cwd_canonical = std::path::Path::new(cwd)
-            .canonicalize()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| cwd.to_string());
-
-        // Normalize command name (strip ./)
         let name_normalized = name.strip_prefix("./").unwrap_or(name);
         let pattern_cmd_normalized = pattern_cmd.strip_prefix("./").unwrap_or(pattern_cmd);
-
-        // Resolve absolute paths using canonical paths
-        let cmd_absolute = if name_normalized.starts_with('/') {
-            name_normalized.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                cwd_canonical.trim_end_matches('/'),
-                name_normalized
-            )
-        };
-
-        let pattern_absolute = if pattern_cmd_normalized.starts_with('/') {
-            pattern_cmd_normalized.to_string()
-        } else {
-            format!(
-                "{}/{}",
-                rule_cwd_canonical.trim_end_matches('/'),
-                pattern_cmd_normalized
-            )
-        };
-
-        // Compare resolved paths
+        let cwd_canonical = self.canonical_path(cwd);
+        let rule_cwd_canonical = self.canonical_path(self.strip_cwd_glob(rule_cwd));
+        let cmd_absolute = self.resolve_command_path(name_normalized, &cwd_canonical);
+        let pattern_absolute =
+            self.resolve_command_path(pattern_cmd_normalized, &rule_cwd_canonical);
         if cmd_absolute != pattern_absolute {
             return false;
         }
 
-        // If pattern has subcommands/flags, check those too
-        if pattern_parts.len() > 1 {
-            self.matches_pattern(pattern, name_normalized, args, rule_opts)
-        } else {
-            true
-        }
+        pattern_parts.len() == 1 || self.matches_pattern(pattern, name_normalized, args, rule_opts)
     }
 
     /// Check if current working directory matches the pattern
     fn matches_cwd(&self, pattern: &str, cwd_override: Option<&str>) -> bool {
-        let cwd_str = if let Some(override_cwd) = cwd_override {
-            // Use the provided cwd override, canonicalizing it
-            let path = std::path::Path::new(override_cwd);
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            canonical.to_string_lossy().to_string()
-        } else {
-            // Fall back to actual current directory
-            let Ok(cwd) = std::env::current_dir() else {
-                return false;
-            };
-            let cwd = cwd.canonicalize().unwrap_or(cwd);
-            let Some(s) = cwd.to_str() else {
-                return false;
-            };
-            s.to_string()
+        let Some(cwd_str) = self.current_or_override_cwd(cwd_override) else {
+            return false;
         };
-
-        // Expand ~ to home directory in pattern
-        let expanded = if pattern.starts_with("~/") {
-            if let Ok(home) = std::env::var("HOME") {
-                format!("{}{}", home, &pattern[1..])
-            } else {
-                pattern.to_string()
-            }
-        } else {
-            pattern.to_string()
-        };
-        // Resolve symlinks in pattern path too
-        let expanded = std::path::Path::new(&expanded)
-            .canonicalize()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or(expanded);
-
-        // Strip trailing /** or /* for prefix matching
-        let base_path = expanded
-            .strip_suffix("/**")
-            .or_else(|| expanded.strip_suffix("/*"))
-            .unwrap_or(&expanded);
-
-        // Use prefix matching: cwd must equal pattern or be under it
-        if cwd_str == base_path {
-            return true;
-        }
-        let prefix = if base_path.ends_with('/') {
-            base_path.to_string()
-        } else {
-            format!("{}/", base_path)
-        };
-        cwd_str.starts_with(&prefix)
+        let expanded = self.canonical_path(&self.expand_home(pattern));
+        let base_path = self.strip_cwd_glob(&expanded);
+        cwd_str == base_path || cwd_str.starts_with(&self.path_prefix(base_path))
     }
 
     /// Match a rule with host checking
@@ -292,65 +169,20 @@ impl Config {
         suggestion: Option<String>,
         ctx: ExecContext,
     ) -> Option<PermissionResult> {
+        let main_thread_overriding = self.rule_main_thread_override(rule, ctx);
+        let effective_perm = self.effective_rule_permission(rule, ctx);
+
         for pattern in &rule.commands {
-            if self.matches_pattern(pattern, name, args, &rule.opts_with_args) {
-                // Check cwd constraint if present
-                if let Some(ref cwd_pattern) = rule.cwd {
-                    if !self.matches_cwd(cwd_pattern, None) {
-                        continue;
-                    }
-                }
-
-                let main_thread_overriding = !ctx.is_subagent
-                    && self.main_thread_default.is_some()
-                    && rule.main_thread_permission.is_none();
-
-                let effective_perm = if !ctx.is_subagent && self.main_thread_default.is_some() {
-                    rule.main_thread_permission
-                        .as_deref()
-                        .unwrap_or(self.main_thread_default.as_deref().unwrap())
-                } else {
-                    rule.effective_permission(ctx)
-                };
-
-                if main_thread_overriding {
-                    return Some(PermissionResult {
-                        permission: self.parse_permission(effective_perm),
-                        reason: "main thread bash disabled".to_string(),
-                        suggestion: Some(
-                            "Use Task() to delegate bash commands to subagents".to_string(),
-                        ),
-                    });
-                }
-
-                // Check if this is a host-checking rule
-                if effective_perm == "check_host" {
-                    if let Some(h) = host {
-                        // Match against host rules
-                        for host_rule in &rule.host_rules {
-                            if glob_match(&host_rule.pattern, h) {
-                                return Some(PermissionResult {
-                                    permission: self.parse_permission(&host_rule.permission),
-                                    reason: format!("{} (host: {})", rule.reason, h),
-                                    suggestion,
-                                });
-                            }
-                        }
-                    }
-                    // No host or no matching host rule - use ask as default
-                    return Some(PermissionResult {
-                        permission: Permission::Ask,
-                        reason: format!("{} (unknown host)", rule.reason),
-                        suggestion,
-                    });
-                }
-
-                return Some(PermissionResult {
-                    permission: self.parse_permission(effective_perm),
-                    reason: rule.reason.clone(),
-                    suggestion,
-                });
+            if !self.rule_matches_host_pattern(rule, pattern, name, args) {
+                continue;
             }
+            if main_thread_overriding {
+                return Some(self.main_thread_override_result(effective_perm));
+            }
+            if effective_perm == "check_host" {
+                return Some(self.host_checked_result(rule, host, suggestion));
+            }
+            return Some(self.rule_match_result(rule, effective_perm, suggestion, false));
         }
         None
     }
@@ -364,28 +196,14 @@ impl Config {
         cwd: Option<&str>,
         rule_opts: &[String],
     ) -> bool {
-        // Try direct match first
         if self.matches_pattern(pattern, name, args, rule_opts) {
             return true;
         }
 
-        // If command is absolute and pattern is relative, try matching relative to cwd
-        if let Some(cwd) = cwd {
-            if name.starts_with('/') && !pattern.starts_with('/') {
-                let cwd_with_slash = if cwd.ends_with('/') {
-                    cwd.to_string()
-                } else {
-                    format!("{}/", cwd)
-                };
-                if let Some(relative) = name.strip_prefix(&cwd_with_slash) {
-                    if self.matches_pattern(pattern, relative, args, rule_opts) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
+        let Some(relative) = self.relative_name_from_cwd(name, pattern, cwd) else {
+            return false;
+        };
+        self.matches_pattern(pattern, &relative, args, rule_opts)
     }
 
     /// Check if a command matches a pattern
@@ -456,30 +274,7 @@ impl Config {
         args: &[String],
         rule_opts: &[String],
     ) -> Vec<String> {
-        // Flags that take an argument for common commands (hardcoded defaults)
-        let default_flags: &[&str] = match cmd_name {
-            "git" => &["-C", "-c", "--git-dir", "--work-tree", "--namespace"],
-            "docker" => &[
-                "-H",
-                "--host",
-                "--config",
-                "--context",
-                "-c",
-                "-l",
-                "--log-level",
-            ],
-            "kubectl" => &[
-                "-n",
-                "--namespace",
-                "--context",
-                "--cluster",
-                "-s",
-                "--server",
-            ],
-            "sentry" => &["-s", "--slug"],
-            _ => &[],
-        };
-
+        let default_flags = self.default_subcommand_flags(cmd_name);
         let mut subcommands = Vec::new();
         let mut skip_next = false;
 
@@ -490,14 +285,10 @@ impl Config {
             }
 
             if arg.starts_with('-') {
-                let flag = if arg.contains('=') {
+                let Some(flag) = self.subcommand_flag(arg) else {
                     continue;
-                } else {
-                    arg.as_str()
                 };
-
-                // Check rule-specific opts first, then hardcoded defaults
-                if rule_opts.iter().any(|o| o == flag) || default_flags.contains(&flag) {
+                if rule_opts.iter().any(|opt| opt == flag) || default_flags.contains(&flag) {
                     skip_next = true;
                 }
                 continue;
@@ -572,5 +363,209 @@ impl Config {
             "deny" => Permission::Deny,
             _ => Permission::Passthrough,
         }
+    }
+
+    fn rule_main_thread_override(&self, rule: &super::Rule, ctx: ExecContext) -> bool {
+        !ctx.is_subagent
+            && self.main_thread_default.is_some()
+            && rule.main_thread_permission.is_none()
+    }
+
+    fn effective_rule_permission<'a>(&'a self, rule: &'a super::Rule, ctx: ExecContext) -> &'a str {
+        if !ctx.is_subagent && self.main_thread_default.is_some() {
+            rule.main_thread_permission
+                .as_deref()
+                .unwrap_or(self.main_thread_default.as_deref().unwrap())
+        } else {
+            rule.effective_permission(ctx)
+        }
+    }
+
+    fn rule_matches_with_cwd(
+        &self,
+        rule: &super::Rule,
+        pattern: &str,
+        name: &str,
+        args: &[String],
+        cwd: Option<&str>,
+    ) -> bool {
+        if let Some(rule_cwd) = rule.cwd.as_deref() {
+            return self.matches_pattern_with_path_resolution(
+                pattern,
+                name,
+                args,
+                cwd,
+                rule_cwd,
+                &rule.opts_with_args,
+            );
+        }
+
+        self.matches_pattern_with_cwd(pattern, name, args, cwd, &rule.opts_with_args)
+    }
+
+    fn rule_match_result(
+        &self,
+        rule: &super::Rule,
+        effective_perm: &str,
+        suggestion: Option<String>,
+        main_thread_overriding: bool,
+    ) -> PermissionResult {
+        if main_thread_overriding {
+            return self.main_thread_override_result(effective_perm);
+        }
+
+        PermissionResult {
+            permission: self.parse_permission(effective_perm),
+            reason: rule.reason.clone(),
+            suggestion,
+        }
+    }
+
+    fn main_thread_override_result(&self, effective_perm: &str) -> PermissionResult {
+        PermissionResult {
+            permission: self.parse_permission(effective_perm),
+            reason: "main thread bash disabled".to_string(),
+            suggestion: Some("Use Task() to delegate bash commands to subagents".to_string()),
+        }
+    }
+
+    fn pattern_parts<'a>(&self, pattern: &'a str) -> Vec<&'a str> {
+        pattern.split_whitespace().collect()
+    }
+
+    fn strip_cwd_glob<'a>(&self, path: &'a str) -> &'a str {
+        path.strip_suffix("/**")
+            .or_else(|| path.strip_suffix("/*"))
+            .unwrap_or(path)
+    }
+
+    fn canonical_path(&self, path: &str) -> String {
+        std::path::Path::new(path)
+            .canonicalize()
+            .map(|resolved| resolved.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string())
+    }
+
+    fn resolve_command_path(&self, name: &str, cwd: &str) -> String {
+        if name.starts_with('/') {
+            name.to_string()
+        } else {
+            format!("{}/{}", cwd.trim_end_matches('/'), name)
+        }
+    }
+
+    fn current_or_override_cwd(&self, cwd_override: Option<&str>) -> Option<String> {
+        cwd_override
+            .map(|cwd| self.canonical_path(cwd))
+            .or_else(|| {
+                let cwd = std::env::current_dir().ok()?;
+                cwd.to_str().map(|path| self.canonical_path(path))
+            })
+    }
+
+    fn expand_home(&self, pattern: &str) -> String {
+        if !pattern.starts_with("~/") {
+            return pattern.to_string();
+        }
+
+        std::env::var("HOME")
+            .map(|home| format!("{}{}", home, &pattern[1..]))
+            .unwrap_or_else(|_| pattern.to_string())
+    }
+
+    fn path_prefix(&self, path: &str) -> String {
+        if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{}/", path)
+        }
+    }
+
+    fn rule_matches_host_pattern(
+        &self,
+        rule: &super::Rule,
+        pattern: &str,
+        name: &str,
+        args: &[String],
+    ) -> bool {
+        self.matches_pattern(pattern, name, args, &rule.opts_with_args)
+            && rule
+                .cwd
+                .as_deref()
+                .is_none_or(|cwd_pattern| self.matches_cwd(cwd_pattern, None))
+    }
+
+    fn host_checked_result(
+        &self,
+        rule: &super::Rule,
+        host: Option<&str>,
+        suggestion: Option<String>,
+    ) -> PermissionResult {
+        let Some(host) = host else {
+            return PermissionResult {
+                permission: Permission::Ask,
+                reason: format!("{} (unknown host)", rule.reason),
+                suggestion,
+            };
+        };
+
+        for host_rule in &rule.host_rules {
+            if glob_match(&host_rule.pattern, host) {
+                return PermissionResult {
+                    permission: self.parse_permission(&host_rule.permission),
+                    reason: format!("{} (host: {})", rule.reason, host),
+                    suggestion,
+                };
+            }
+        }
+
+        PermissionResult {
+            permission: Permission::Ask,
+            reason: format!("{} (unknown host)", rule.reason),
+            suggestion,
+        }
+    }
+
+    fn relative_name_from_cwd(
+        &self,
+        name: &str,
+        pattern: &str,
+        cwd: Option<&str>,
+    ) -> Option<String> {
+        let cwd = cwd?;
+        if !name.starts_with('/') || pattern.starts_with('/') {
+            return None;
+        }
+        let relative = name.strip_prefix(&self.path_prefix(cwd))?;
+        Some(relative.to_string())
+    }
+
+    fn default_subcommand_flags(&self, cmd_name: &str) -> &[&str] {
+        match cmd_name {
+            "git" => &["-C", "-c", "--git-dir", "--work-tree", "--namespace"],
+            "docker" => &[
+                "-H",
+                "--host",
+                "--config",
+                "--context",
+                "-c",
+                "-l",
+                "--log-level",
+            ],
+            "kubectl" => &[
+                "-n",
+                "--namespace",
+                "--context",
+                "--cluster",
+                "-s",
+                "--server",
+            ],
+            "sentry" => &["-s", "--slug"],
+            _ => &[],
+        }
+    }
+
+    fn subcommand_flag<'a>(&self, arg: &'a str) -> Option<&'a str> {
+        if arg.contains('=') { None } else { Some(arg) }
     }
 }

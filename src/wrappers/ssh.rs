@@ -33,47 +33,51 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
         }
 
         if !found_host {
-            if arg.starts_with('-') {
-                let opt = if arg.len() > 2 {
-                    &arg[0..2]
-                } else {
-                    arg.as_str()
-                };
-                if opts_with_args.contains(&opt) {
-                    if arg.len() == 2 {
-                        skip_next = true;
-                    }
-                }
+            if is_ssh_option(arg) {
+                skip_next = ssh_option_consumes_next(arg, &opts_with_args);
                 continue;
             }
 
             found_host = true;
-            let h = if let Some(at_pos) = arg.find('@') {
-                &arg[at_pos + 1..]
-            } else {
-                arg.as_str()
-            };
-            host = Some(h.to_string());
+            host = Some(extract_host(arg));
             continue;
         }
 
         inner_parts.push(arg.clone());
     }
 
-    let inner_command = if inner_parts.is_empty() {
-        None
-    } else if inner_parts.len() == 1 {
-        // Single argument - might be a quoted command string
-        Some(strip_quotes(&inner_parts[0]))
-    } else {
-        Some(inner_parts.join(" "))
-    };
-
     Some(UnwrapResult {
-        inner_command,
+        inner_command: join_remote_command(&inner_parts),
         host,
         wrapper: "ssh".to_string(),
     })
+}
+
+fn is_ssh_option(arg: &str) -> bool {
+    arg.starts_with('-')
+}
+
+fn ssh_option_consumes_next(arg: &str, opts_with_args: &[&str]) -> bool {
+    if arg.len() != 2 {
+        return false;
+    }
+
+    opts_with_args.contains(&arg)
+}
+
+fn extract_host(arg: &str) -> String {
+    arg.split_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(arg)
+        .to_string()
+}
+
+fn join_remote_command(inner_parts: &[String]) -> Option<String> {
+    match inner_parts {
+        [] => None,
+        [single] => Some(strip_quotes(single)),
+        _ => Some(inner_parts.join(" ")),
+    }
 }
 
 #[cfg(test)]
@@ -84,7 +88,6 @@ mod tests {
         Command {
             name: "ssh".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("ssh {}", args.join(" ")),
         }
     }
 

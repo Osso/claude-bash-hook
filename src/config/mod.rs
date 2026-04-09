@@ -293,51 +293,13 @@ impl Config {
 
     /// Check if a directory is allowed for git push to master/main
     pub fn is_master_push_allowed(&self, cwd: Option<&str>) -> bool {
-        let Some(cwd) = cwd else {
+        let Some(cwd) = cwd.and_then(canonicalize_for_match) else {
             return false;
         };
-
-        // Canonicalize cwd for comparison
-        let cwd_path = std::path::Path::new(cwd);
-        let cwd_canonical = cwd_path
-            .canonicalize()
-            .unwrap_or_else(|_| cwd_path.to_path_buf());
-        let cwd_str = cwd_canonical.to_string_lossy();
-
-        for allowed in &self.master_push_allowed {
-            // Expand ~ to home directory
-            let expanded = if allowed.starts_with("~/") {
-                if let Ok(home) = std::env::var("HOME") {
-                    format!("{}{}", home, &allowed[1..])
-                } else {
-                    allowed.clone()
-                }
-            } else {
-                allowed.clone()
-            };
-
-            // Canonicalize allowed path
-            let allowed_path = std::path::Path::new(&expanded);
-            let allowed_canonical = allowed_path
-                .canonicalize()
-                .unwrap_or_else(|_| allowed_path.to_path_buf());
-            let allowed_str = allowed_canonical.to_string_lossy();
-
-            // Check exact match or subdirectory
-            if cwd_str == allowed_str {
-                return true;
-            }
-            let prefix = if allowed_str.ends_with('/') {
-                allowed_str.to_string()
-            } else {
-                format!("{}/", allowed_str)
-            };
-            if cwd_str.starts_with(&prefix) {
-                return true;
-            }
-        }
-
-        false
+        self.master_push_allowed
+            .iter()
+            .filter_map(|allowed| canonicalize_for_match(&expand_home(allowed)))
+            .any(|allowed| is_same_or_child_path(&cwd, &allowed))
     }
 
     /// Check if a command name is a MySQL/MariaDB alias
@@ -377,6 +339,34 @@ impl Config {
             }
         }
         false
+    }
+}
+
+fn canonicalize_for_match(path: &str) -> Option<String> {
+    let path = Path::new(path);
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    canonical.to_str().map(str::to_string)
+}
+
+fn expand_home(path: &str) -> String {
+    if !path.starts_with("~/") {
+        return path.to_string();
+    }
+
+    std::env::var("HOME")
+        .map(|home| format!("{}{}", home, &path[1..]))
+        .unwrap_or_else(|_| path.to_string())
+}
+
+fn is_same_or_child_path(path: &str, allowed: &str) -> bool {
+    path == allowed || path.starts_with(&path_prefix(allowed))
+}
+
+fn path_prefix(path: &str) -> String {
+    if path.ends_with('/') {
+        path.to_string()
+    } else {
+        format!("{}/", path)
     }
 }
 

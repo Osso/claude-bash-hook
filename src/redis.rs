@@ -116,64 +116,75 @@ struct RedisCommand {
 
 /// Extract the Redis command from redis-cli arguments
 fn extract_redis_command(cmd: &Command) -> Option<RedisCommand> {
-    // Skip options to find the command
-    // Common options: -h host, -p port, -n db, -a password, -u uri, --user, --pass, etc.
-    let opts_with_args = [
-        "-h",
-        "-p",
-        "-n",
-        "-a",
-        "-u",
-        "--user",
-        "--pass",
-        "--askpass",
-        "-c",
-        "--cluster",
-        "--tls-ciphers",
-        "--tls-ca-cert",
-        "--tls-cert",
-        "--tls-key",
-    ];
-
-    let mut iter = cmd.args.iter().peekable();
-    let mut command_parts: Vec<&str> = Vec::new();
-
-    while let Some(arg) = iter.next() {
-        // Skip options with arguments
-        if opts_with_args.iter().any(|o| arg == *o) {
-            iter.next(); // Skip the argument
-            continue;
-        }
-        // Skip boolean flags
-        if arg.starts_with('-') {
-            continue;
-        }
-        // This is the Redis command or its arguments
-        command_parts.push(arg);
-    }
-
+    let command_parts = redis_command_parts(&cmd.args);
     if command_parts.is_empty() {
         return None;
     }
 
-    // Build command string (first 1-2 parts for compound commands like CONFIG GET)
-    let (redis_cmd, arg_count) = if command_parts.len() >= 2 {
-        // Check if this is a compound command (like CONFIG GET)
-        let potential_compound =
-            format!("{} {}", command_parts[0], command_parts[1]).to_uppercase();
-        if READ_ONLY_COMMANDS.iter().any(|c| *c == potential_compound) {
-            (potential_compound, command_parts.len() - 2)
-        } else {
-            (command_parts[0].to_uppercase(), command_parts.len() - 1)
-        }
-    } else {
-        (command_parts[0].to_uppercase(), 0)
-    };
+    let (command, arg_count) = parse_redis_command(&command_parts);
 
-    Some(RedisCommand {
-        command: redis_cmd,
-        arg_count,
-    })
+    Some(RedisCommand { command, arg_count })
+}
+
+fn redis_command_parts(args: &[String]) -> Vec<&str> {
+    let mut command_parts = Vec::new();
+    let mut skip_next = false;
+
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if redis_option_takes_value(arg) {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        command_parts.push(arg.as_str());
+    }
+
+    command_parts
+}
+
+fn redis_option_takes_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-h" | "-p"
+            | "-n"
+            | "-a"
+            | "-u"
+            | "--user"
+            | "--pass"
+            | "--askpass"
+            | "-c"
+            | "--cluster"
+            | "--tls-ciphers"
+            | "--tls-ca-cert"
+            | "--tls-cert"
+            | "--tls-key"
+    )
+}
+
+fn parse_redis_command(command_parts: &[&str]) -> (String, usize) {
+    if let Some(compound) = compound_redis_command(command_parts) {
+        return (compound, command_parts.len() - 2);
+    }
+
+    (command_parts[0].to_uppercase(), command_parts.len() - 1)
+}
+
+fn compound_redis_command(command_parts: &[&str]) -> Option<String> {
+    if command_parts.len() < 2 {
+        return None;
+    }
+
+    let compound = format!("{} {}", command_parts[0], command_parts[1]).to_uppercase();
+    READ_ONLY_COMMANDS
+        .iter()
+        .any(|command| *command == compound)
+        .then_some(compound)
 }
 
 /// Check if a Redis command is read-only
@@ -235,7 +246,6 @@ mod tests {
         Command {
             name: "redis-cli".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("redis-cli {}", args.join(" ")),
         }
     }
 
@@ -243,7 +253,6 @@ mod tests {
         Command {
             name: "valkey-cli".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("valkey-cli {}", args.join(" ")),
         }
     }
 

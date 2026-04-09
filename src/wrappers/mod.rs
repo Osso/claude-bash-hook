@@ -27,7 +27,6 @@ pub struct UnwrapResult {
     /// For SSH/SCP: the extracted host
     pub host: Option<String>,
     /// The wrapper that was unwrapped (for debugging/tests)
-    #[allow(dead_code)]
     pub wrapper: String,
 }
 
@@ -110,14 +109,11 @@ fn unwrap_generic(cmd: &Command, config: &WrapperConfig) -> Option<UnwrapResult>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_command;
     use std::path::Path;
 
     fn make_cmd(name: &str, args: &[&str]) -> Command {
-        Command {
-            name: name.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("{} {}", name, args.join(" ")),
-        }
+        make_command(name, args)
     }
 
     fn test_config() -> Config {

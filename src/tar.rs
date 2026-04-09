@@ -21,67 +21,11 @@ pub fn check_tar(
         return None;
     }
 
-    // Check if this is a list operation (read-only, always allow)
-    let is_list = cmd.args.iter().any(|a| {
-        a == "-t"
-            || a == "-tf"
-            || a == "-tzf"
-            || a == "-tjf"
-            || a == "-tJf"
-            || a.starts_with("-t")
-            || (a.starts_with('-') && a.contains('t') && !a.contains('x'))
-    });
-
-    if is_list {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "tar list (read-only)".to_string(),
-            suggestion: None,
-        });
+    match tar_mode(&cmd.args) {
+        TarMode::List => Some(allow_reason("tar list (read-only)")),
+        TarMode::Extract => allow_tar_extract(&cmd.args, virtual_cwd, has_uncertain_flow),
+        TarMode::Other => None,
     }
-
-    // Check if this is an extract operation
-    let is_extract = cmd.args.iter().any(|a| {
-        a == "-x"
-            || a == "-xf"
-            || a == "-xzf"
-            || a == "-xjf"
-            || a == "-xJf"
-            || a.starts_with("-x")
-            || a.contains('x') // handles combined flags like -xvf
-    });
-
-    if !is_extract {
-        return None;
-    }
-
-    // Find the -C/--directory target
-    let target_dir = find_target_dir(&cmd.args);
-
-    if let Some(dir) = target_dir {
-        if is_safe_tmp_claude_path(dir) {
-            return Some(PermissionResult {
-                permission: Permission::Allow,
-                reason: "tar extract to /tmp/claude".to_string(),
-                suggestion: None,
-            });
-        }
-        // Explicit -C to non-safe path - passthrough
-        return None;
-    }
-
-    // No -C specified - allow if current directory (or virtual cwd) is under /tmp/claude/
-    // But NOT if there's uncertain control flow (cd might have changed in conditional)
-    if !has_uncertain_flow && is_cwd_safe(virtual_cwd) {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "tar extract (cwd in /tmp/claude)".to_string(),
-            suggestion: None,
-        });
-    }
-
-    // Passthrough
-    None
 }
 
 /// Check if cwd (real or virtual) is under /tmp/claude/
@@ -139,6 +83,64 @@ fn find_target_dir(args: &[String]) -> Option<&str> {
     None
 }
 
+fn allow_tar_extract(
+    args: &[String],
+    virtual_cwd: Option<&str>,
+    has_uncertain_flow: bool,
+) -> Option<PermissionResult> {
+    if let Some(dir) = find_target_dir(args) {
+        return is_safe_tmp_claude_path(dir).then(|| allow_reason("tar extract to /tmp/claude"));
+    }
+
+    (!has_uncertain_flow && is_cwd_safe(virtual_cwd))
+        .then(|| allow_reason("tar extract (cwd in /tmp/claude)"))
+}
+
+fn allow_reason(reason: &str) -> PermissionResult {
+    PermissionResult {
+        permission: Permission::Allow,
+        reason: reason.to_string(),
+        suggestion: None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TarMode {
+    List,
+    Extract,
+    Other,
+}
+
+fn tar_mode(args: &[String]) -> TarMode {
+    if args.iter().any(|arg| is_tar_list_flag(arg)) {
+        return TarMode::List;
+    }
+    if args.iter().any(|arg| is_tar_extract_flag(arg)) {
+        return TarMode::Extract;
+    }
+    TarMode::Other
+}
+
+fn is_tar_list_flag(arg: &str) -> bool {
+    arg == "-t"
+        || arg == "-tf"
+        || arg == "-tzf"
+        || arg == "-tjf"
+        || arg == "-tJf"
+        || arg.starts_with("-t")
+        || (arg.starts_with('-') && arg.contains('t') && !arg.contains('x'))
+}
+
+fn is_tar_extract_flag(arg: &str) -> bool {
+    arg == "-x"
+        || arg == "-xf"
+        || arg == "-xzf"
+        || arg == "-xjf"
+        || arg == "-xJf"
+        || arg.starts_with("-x")
+        || arg.contains('x')
+}
+
 /// Check if a path is safely under /tmp/claude/
 fn is_safe_tmp_claude_path(path: &str) -> bool {
     if path.is_empty() || path.contains('\0') || path.contains('\n') {
@@ -192,7 +194,6 @@ mod tests {
         Command {
             name: "tar".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("tar {}", args.join(" ")),
         }
     }
 

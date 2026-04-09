@@ -25,49 +25,14 @@ pub struct NushellAnalysisResult {
 pub fn analyze(cmd: &str) -> NushellAnalysisResult {
     let engine_state = EngineState::new();
     let mut working_set = StateWorkingSet::new(&engine_state);
-
     let block = parse(&mut working_set, None, cmd.as_bytes(), false);
-
-    // Check for parse errors, but ignore errors from missing stdlib
-    // Only real syntax errors should fail (unclosed braces, etc.)
-    let has_real_error = working_set.parse_errors.iter().any(|e| {
-        let msg = format!("{}", e);
-        // Unknown state and Variable not found happen when builtins/context aren't loaded
-        // These are not real syntax errors
-        !msg.contains("Unknown state")
-            && !msg.contains("Variable not found")
-            && !msg.contains("IncompatiblePathAccess")
-    });
-
-    if has_real_error {
-        let error = working_set
-            .parse_errors
-            .iter()
-            .find(|e| {
-                let msg = format!("{}", e);
-                !msg.contains("Unknown state")
-                    && !msg.contains("Variable not found")
-                    && !msg.contains("IncompatiblePathAccess")
-            })
-            .map(|e| format!("{}", e))
-            .unwrap_or_else(|| "Unknown parse error".to_string());
-
-        return NushellAnalysisResult {
-            commands: vec![],
-            success: false,
-            error: Some(error),
-        };
+    if let Some(error) = first_real_parse_error(&working_set) {
+        return parse_error_result(error);
     }
 
-    // Extract external commands from the parsed block
     let mut commands = Vec::new();
     extract_external_commands(&block, cmd.as_bytes(), &mut commands);
-
-    NushellAnalysisResult {
-        commands,
-        success: true,
-        error: None,
-    }
+    parse_success_result(commands)
 }
 
 /// Nushell builtins that are read-only and safe to allow
@@ -235,7 +200,7 @@ fn extract_external_commands(
 
 /// Extract an external command call, skipping safe builtins
 fn extract_external_call(
-    expr: &nu_protocol::ast::Expression,
+    _expr: &nu_protocol::ast::Expression,
     head: &nu_protocol::ast::Expression,
     args: &[nu_protocol::ast::ExternalArgument],
     source: &[u8],
@@ -248,7 +213,6 @@ fn extract_external_call(
         return;
     }
 
-    let text = span_to_string(expr.span, source);
     let arg_strings: Vec<String> = args
         .iter()
         .filter_map(|arg| match arg {
@@ -260,7 +224,6 @@ fn extract_external_call(
     commands.push(Command {
         name: clean_name.to_string(),
         args: arg_strings,
-        text: text.trim_start_matches('^').to_string(),
     });
 }
 
@@ -269,7 +232,7 @@ const DANGEROUS_BUILTINS: &[&str] = &["rm", "mv", "cp", "mkdir", "touch", "save"
 
 /// Extract a dangerous builtin call and recurse into arguments
 fn extract_builtin_call(
-    expr: &nu_protocol::ast::Expression,
+    _expr: &nu_protocol::ast::Expression,
     call: &nu_protocol::ast::Call,
     source: &[u8],
     commands: &mut Vec<Command>,
@@ -286,7 +249,6 @@ fn extract_builtin_call(
         commands.push(Command {
             name: call_name,
             args: arg_strings,
-            text: span_to_string(expr.span, source),
         });
     }
 
@@ -312,24 +274,8 @@ fn extract_from_expression(
         Expr::Call(call) => {
             extract_builtin_call(expr, call, source, commands);
         }
-        Expr::List(items) => {
-            for item in items {
-                extract_from_expression(item.expr(), source, commands);
-            }
-        }
-        Expr::Record(items) => {
-            for item in items {
-                match item {
-                    nu_protocol::ast::RecordItem::Pair(k, v) => {
-                        extract_from_expression(k, source, commands);
-                        extract_from_expression(v, source, commands);
-                    }
-                    nu_protocol::ast::RecordItem::Spread(_, e) => {
-                        extract_from_expression(e, source, commands);
-                    }
-                }
-            }
-        }
+        Expr::List(items) => extract_list_items(items, source, commands),
+        Expr::Record(items) => extract_record_items(items, source, commands),
         Expr::FullCellPath(fcp) => {
             extract_from_expression(&fcp.head, source, commands);
         }
@@ -341,6 +287,65 @@ fn extract_from_expression(
             extract_from_expression(e, source, commands);
         }
         _ => {}
+    }
+}
+
+fn first_real_parse_error(working_set: &StateWorkingSet<'_>) -> Option<String> {
+    working_set
+        .parse_errors
+        .iter()
+        .find(|error| is_real_parse_error(error))
+        .map(|error| error.to_string())
+}
+
+fn is_real_parse_error(error: &impl std::fmt::Display) -> bool {
+    let message = error.to_string();
+    !message.contains("Unknown state")
+        && !message.contains("Variable not found")
+        && !message.contains("IncompatiblePathAccess")
+}
+
+fn parse_error_result(error: String) -> NushellAnalysisResult {
+    NushellAnalysisResult {
+        commands: vec![],
+        success: false,
+        error: Some(error),
+    }
+}
+
+fn parse_success_result(commands: Vec<Command>) -> NushellAnalysisResult {
+    NushellAnalysisResult {
+        commands,
+        success: true,
+        error: None,
+    }
+}
+
+fn extract_list_items(
+    items: &[nu_protocol::ast::ListItem],
+    source: &[u8],
+    commands: &mut Vec<Command>,
+) {
+    for item in items {
+        extract_from_expression(item.expr(), source, commands);
+    }
+}
+
+fn extract_record_items(
+    items: &[nu_protocol::ast::RecordItem],
+    source: &[u8],
+    commands: &mut Vec<Command>,
+) {
+    for item in items {
+        match item {
+            nu_protocol::ast::RecordItem::Pair(key, value) => {
+                extract_from_expression(key, source, commands);
+                extract_from_expression(value, source, commands);
+            }
+            nu_protocol::ast::RecordItem::Spread(_, value) => {
+                extract_from_expression(value, source, commands);
+            }
+        }
     }
 }
 

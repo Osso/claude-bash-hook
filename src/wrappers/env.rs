@@ -60,7 +60,6 @@ mod tests {
         Command {
             name: "env".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("env {}", args.join(" ")),
         }
     }
 

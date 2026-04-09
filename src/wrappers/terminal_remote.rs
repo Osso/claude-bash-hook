@@ -6,11 +6,6 @@ use crate::wrappers::UnwrapResult;
 /// Unwrap kitty-remote/wezterm-remote commands
 /// Only the "run" subcommand wraps another command
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
-    let mut skip_next = false;
-    let mut found_subcommand = false;
-    let mut inner_parts = Vec::new();
-
-    // Options that take arguments
     let opts_with_args = [
         "-m",
         "-t",
@@ -24,45 +19,40 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
         "--window-id",
         "--title",
     ];
-
-    for arg in &cmd.args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-
-        if found_subcommand {
-            inner_parts.push(arg.clone());
-            continue;
-        }
-
-        if arg.starts_with('-') {
-            if opts_with_args.contains(&arg.as_str()) {
-                skip_next = true;
-            }
-            continue;
-        }
-
-        // First non-option is the subcommand
-        if arg == "run" {
-            // "run" subcommand wraps a command
-            found_subcommand = true;
-            continue;
-        }
-
-        // Other subcommands don't wrap commands
-        return None;
-    }
-
-    if inner_parts.is_empty() {
-        return None;
-    }
+    let inner_parts = collect_run_subcommand(&cmd.args, &opts_with_args)?;
 
     Some(UnwrapResult {
         inner_command: Some(inner_parts.join(" ")),
         host: None,
         wrapper: cmd.name.clone(),
     })
+}
+
+fn collect_run_subcommand(args: &[String], opts_with_args: &[&str]) -> Option<Vec<String>> {
+    let mut skip_next = false;
+    let mut found_run = false;
+    let mut inner_parts = Vec::new();
+
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if found_run {
+            inner_parts.push(arg.clone());
+            continue;
+        }
+        if arg.starts_with('-') {
+            skip_next = opts_with_args.contains(&arg.as_str());
+            continue;
+        }
+        if arg != "run" {
+            return None;
+        }
+        found_run = true;
+    }
+
+    (!inner_parts.is_empty()).then_some(inner_parts)
 }
 
 #[cfg(test)]
@@ -73,7 +63,6 @@ mod tests {
         Command {
             name: name.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("{} {}", name, args.join(" ")),
         }
     }
 

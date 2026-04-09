@@ -21,36 +21,39 @@ fn strip_quotes(query: &str) -> String {
 fn strip_sql_comments(query: &str) -> String {
     let mut result = String::new();
     let mut chars = query.chars().peekable();
+    let mut state = CommentState::Normal;
 
     while let Some(c) = chars.next() {
-        // Single-line comment: -- until end of line
-        if c == '-' && chars.peek() == Some(&'-') {
-            chars.next(); // consume second -
-            // Skip until newline
-            while let Some(nc) = chars.next() {
-                if nc == '\n' {
-                    result.push('\n');
-                    break;
-                }
+        match state {
+            CommentState::Normal if c == '-' && chars.peek() == Some(&'-') => {
+                chars.next();
+                state = CommentState::SingleLine;
             }
-            continue;
-        }
-        // Multi-line comment: /* ... */
-        if c == '/' && chars.peek() == Some(&'*') {
-            chars.next(); // consume *
-            // Skip until */
-            while let Some(nc) = chars.next() {
-                if nc == '*' && chars.peek() == Some(&'/') {
-                    chars.next(); // consume /
-                    break;
-                }
+            CommentState::Normal if c == '/' && chars.peek() == Some(&'*') => {
+                chars.next();
+                state = CommentState::MultiLine;
             }
-            continue;
+            CommentState::SingleLine if c == '\n' => {
+                result.push('\n');
+                state = CommentState::Normal;
+            }
+            CommentState::MultiLine if c == '*' && chars.peek() == Some(&'/') => {
+                chars.next();
+                state = CommentState::Normal;
+            }
+            CommentState::Normal => result.push(c),
+            CommentState::SingleLine | CommentState::MultiLine => {}
         }
-        result.push(c);
     }
 
     result
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommentState {
+    Normal,
+    SingleLine,
+    MultiLine,
 }
 
 /// Read-only SQL statement prefixes (SQL keywords and SQLite3 dot commands)
@@ -214,13 +217,10 @@ pub fn check_clickhouse_query(cmd: &Command) -> Option<PermissionResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_command;
 
     fn make_cmd(name: &str, args: &[&str]) -> Command {
-        Command {
-            name: name.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("{} {}", name, args.join(" ")),
-        }
+        make_command(name, args)
     }
 
     // MySQL tests

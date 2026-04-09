@@ -43,13 +43,10 @@ pub fn check_interpreter_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_command;
 
     fn make_cmd(name: &str, args: &[&str]) -> Command {
-        Command {
-            name: name.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("{} {}", name, args.join(" ")),
-        }
+        make_command(name, args)
     }
 
     fn config_with_script(script: &str) -> Config {

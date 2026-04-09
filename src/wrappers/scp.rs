@@ -40,7 +40,6 @@ mod tests {
         Command {
             name: "scp".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("scp {}", args.join(" ")),
         }
     }
 

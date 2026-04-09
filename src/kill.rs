@@ -48,7 +48,6 @@ mod tests {
         Command {
             name: "kill".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("kill {}", args.join(" ")),
         }
     }
 

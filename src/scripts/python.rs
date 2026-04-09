@@ -191,40 +191,8 @@ fn has_safe_imports_only(code: &str) -> bool {
 
 fn is_readonly_python(code: &str) -> bool {
     let code_lower = code.to_lowercase();
-
-    // Check for dangerous patterns
     for pattern in DANGEROUS_PATTERNS {
-        let pattern_lower = pattern.to_lowercase();
-
-        // Special handling for open() - check mode
-        if *pattern == "open(" {
-            if code_lower.contains("open(") && has_write_open(code) {
-                return false;
-            }
-            continue;
-        }
-
-        // For builtin function patterns like eval(, exec(, compile( — only match
-        // standalone calls, not method calls (re.compile) or longer names (literal_eval)
-        if pattern.ends_with('(') {
-            let mut search_from = 0;
-            let mut found_bare = false;
-            while let Some(idx) = code_lower[search_from..].find(&pattern_lower) {
-                let abs_idx = search_from + idx;
-                let is_start = abs_idx == 0 || {
-                    let prev = code_lower.as_bytes()[abs_idx - 1];
-                    !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'.'
-                };
-                if is_start {
-                    found_bare = true;
-                    break;
-                }
-                search_from = abs_idx + pattern_lower.len();
-            }
-            if found_bare {
-                return false;
-            }
-        } else if code_lower.contains(&pattern_lower) {
+        if contains_dangerous_python_pattern(code, &code_lower, pattern) {
             return false;
         }
     }
@@ -235,6 +203,42 @@ fn is_readonly_python(code: &str) -> bool {
     }
 
     true
+}
+
+fn contains_dangerous_python_pattern(code: &str, code_lower: &str, pattern: &str) -> bool {
+    if pattern == "open(" {
+        return code_lower.contains("open(") && has_write_open(code);
+    }
+
+    let pattern_lower = pattern.to_lowercase();
+    if pattern.ends_with('(') {
+        return contains_bare_python_call(code_lower, &pattern_lower);
+    }
+
+    code_lower.contains(&pattern_lower)
+}
+
+fn contains_bare_python_call(code_lower: &str, pattern_lower: &str) -> bool {
+    let mut search_from = 0;
+
+    while let Some(idx) = code_lower[search_from..].find(pattern_lower) {
+        let abs_idx = search_from + idx;
+        if is_bare_python_call(code_lower.as_bytes(), abs_idx) {
+            return true;
+        }
+        search_from = abs_idx + pattern_lower.len();
+    }
+
+    false
+}
+
+fn is_bare_python_call(bytes: &[u8], index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+
+    let prev = bytes[index - 1];
+    !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'.'
 }
 
 /// Extract Python code from a heredoc in the full command
@@ -377,13 +381,10 @@ pub fn check_python_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_command;
 
     fn make_cmd(name: &str, args: &[&str]) -> Command {
-        Command {
-            name: name.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("{} {}", name, args.join(" ")),
-        }
+        make_command(name, args)
     }
 
     #[test]
@@ -564,7 +565,6 @@ mod tests {
         let cmd = Command {
             name: "ruby".to_string(),
             args: vec!["-e".to_string(), "puts 'hello'".to_string()],
-            text: "ruby -e puts 'hello'".to_string(),
         };
         let result = check_python_script(&cmd, None, None);
         assert!(result.is_none());

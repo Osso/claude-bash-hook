@@ -248,7 +248,6 @@ mod tests {
         Command {
             name: "git".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("git {}", args.join(" ")),
         }
     }
 

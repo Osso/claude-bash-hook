@@ -5,97 +5,96 @@ use crate::wrappers::UnwrapResult;
 
 /// Unwrap docker exec, docker compose exec, or docker compose run command
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
-    // Check for docker exec
     if cmd.args.first().map(|s| s.as_str()) == Some("exec") {
         return unwrap_exec(&cmd.args[1..], "docker exec");
     }
 
-    // Check for docker compose exec or run
-    if cmd.args.first().map(|s| s.as_str()) == Some("compose") {
-        // Skip compose options to find the subcommand (exec/run)
-        // Options like -f, --file, -p, --project-name take an argument
-        let compose_opts_with_args = ["-f", "--file", "-p", "--project-name", "--env-file"];
-        let mut i = 1;
-        while i < cmd.args.len() {
-            let arg = &cmd.args[i];
-            if arg.starts_with('-') {
-                if arg.contains('=') {
-                    // --file=foo format, skip just this arg
-                    i += 1;
-                } else if compose_opts_with_args.iter().any(|o| *o == arg) {
-                    // -f foo format, skip this and next arg
-                    i += 2;
-                } else {
-                    // Flag without argument (e.g., --verbose)
-                    i += 1;
-                }
-            } else {
-                // Found the subcommand
-                break;
-            }
-        }
-
-        match cmd.args.get(i).map(|s| s.as_str()) {
-            Some("exec") => return unwrap_exec(&cmd.args[i + 1..], "docker compose exec"),
-            Some("run") => return unwrap_compose_run(&cmd.args[i + 1..]),
-            _ => return None,
-        }
+    let compose_index = compose_subcommand_index(&cmd.args)?;
+    match cmd.args.get(compose_index).map(|arg| arg.as_str()) {
+        Some("exec") => unwrap_exec(&cmd.args[compose_index + 1..], "docker compose exec"),
+        Some("run") => unwrap_compose_run(&cmd.args[compose_index + 1..]),
+        _ => None,
     }
-
-    None
 }
 
 /// Unwrap exec-style commands: [OPTIONS] CONTAINER/SERVICE COMMAND [ARG...]
 fn unwrap_exec(args: &[String], wrapper_name: &str) -> Option<UnwrapResult> {
-    // Options that take an argument
-    let opts_with_args = [
-        "-e",
-        "--env",
-        "-u",
-        "--user",
-        "-w",
-        "--workdir",
-        "--env-file",
-        "--index",
-    ];
+    unwrap_after_target(
+        args,
+        &[
+            "-e",
+            "--env",
+            "-u",
+            "--user",
+            "-w",
+            "--workdir",
+            "--env-file",
+            "--index",
+        ],
+        wrapper_name,
+    )
+}
 
-    let mut skip_next = false;
-    let mut found_container = false;
-    let mut inner_parts = Vec::new();
+/// Unwrap docker compose run: [OPTIONS] SERVICE [COMMAND] [ARG...]
+fn unwrap_compose_run(args: &[String]) -> Option<UnwrapResult> {
+    unwrap_after_target(
+        args,
+        &[
+            "-e",
+            "--env",
+            "-u",
+            "--user",
+            "-w",
+            "--workdir",
+            "--entrypoint",
+            "-v",
+            "--volume",
+            "-p",
+            "--publish",
+            "--name",
+            "-l",
+            "--label",
+        ],
+        "docker compose run",
+    )
+}
 
-    for arg in args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-
-        if !found_container {
-            if arg.starts_with('-') {
-                // Handle --opt=value format
-                if arg.contains('=') {
-                    continue;
-                }
-                // Check if this option takes an argument
-                if opts_with_args.iter().any(|o| *o == arg) {
-                    skip_next = true;
-                }
-                continue;
-            }
-
-            // First non-option is the container/service name
-            found_container = true;
-            continue;
-        }
-
-        // Everything after container name is the command
-        inner_parts.push(arg.clone());
+fn compose_subcommand_index(args: &[String]) -> Option<usize> {
+    if args.first().map(|arg| arg.as_str()) != Some("compose") {
+        return None;
     }
 
-    let inner_command = if inner_parts.is_empty() {
-        None
+    let mut index = 1;
+    while index < args.len() && is_compose_option(&args[index]) {
+        index += compose_option_step(&args[index]);
+    }
+    Some(index)
+}
+
+fn is_compose_option(arg: &str) -> bool {
+    arg.starts_with('-')
+}
+
+fn compose_option_step(arg: &str) -> usize {
+    if arg.contains('=') {
+        1
+    } else if matches!(
+        arg,
+        "-f" | "--file" | "-p" | "--project-name" | "--env-file"
+    ) {
+        2
     } else {
-        Some(inner_parts.join(" "))
-    };
+        1
+    }
+}
+
+fn unwrap_after_target(
+    args: &[String],
+    opts_with_args: &[&str],
+    wrapper_name: &str,
+) -> Option<UnwrapResult> {
+    let target_index = first_positional_index(args, opts_with_args)?;
+    let inner_command = join_inner_command(&args[target_index + 1..]);
 
     Some(UnwrapResult {
         inner_command,
@@ -104,81 +103,40 @@ fn unwrap_exec(args: &[String], wrapper_name: &str) -> Option<UnwrapResult> {
     })
 }
 
-/// Unwrap docker compose run: [OPTIONS] SERVICE [COMMAND] [ARG...]
-fn unwrap_compose_run(args: &[String]) -> Option<UnwrapResult> {
-    // Options that take an argument for docker compose run
-    let opts_with_args = [
-        "-e",
-        "--env",
-        "-u",
-        "--user",
-        "-w",
-        "--workdir",
-        "--entrypoint",
-        "-v",
-        "--volume",
-        "-p",
-        "--publish",
-        "--name",
-        "-l",
-        "--label",
-    ];
-
+fn first_positional_index(args: &[String], opts_with_args: &[&str]) -> Option<usize> {
     let mut skip_next = false;
-    let mut found_service = false;
-    let mut inner_parts = Vec::new();
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         if skip_next {
             skip_next = false;
             continue;
         }
-
-        if !found_service {
-            if arg.starts_with('-') {
-                // Handle --opt=value format
-                if arg.contains('=') {
-                    continue;
-                }
-                // Check if this option takes an argument
-                if opts_with_args.iter().any(|o| *o == arg) {
-                    skip_next = true;
-                }
-                continue;
-            }
-
-            // First non-option is the service name
-            found_service = true;
+        if arg.contains('=') {
             continue;
         }
-
-        // Everything after service name is the command
-        inner_parts.push(arg.clone());
+        if opts_with_args.iter().any(|opt| *opt == arg) {
+            skip_next = true;
+            continue;
+        }
+        if !arg.starts_with('-') {
+            return Some(index);
+        }
     }
 
-    let inner_command = if inner_parts.is_empty() {
-        None
-    } else {
-        Some(inner_parts.join(" "))
-    };
+    None
+}
 
-    Some(UnwrapResult {
-        inner_command,
-        host: None,
-        wrapper: "docker compose run".to_string(),
-    })
+fn join_inner_command(args: &[String]) -> Option<String> {
+    (!args.is_empty()).then(|| args.join(" "))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_command;
 
     fn make_cmd(args: &[&str]) -> Command {
-        Command {
-            name: "docker".to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("docker {}", args.join(" ")),
-        }
+        make_command("docker", args)
     }
 
     // docker exec tests

@@ -16,18 +16,37 @@ fn strip_quotes(s: &str) -> String {
 /// Unwrap gcloud compute ssh command
 /// gcloud compute ssh [options] INSTANCE [-- COMMAND]
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
-    // Must be: gcloud compute ssh ...
-    if cmd.args.len() < 2 || cmd.args[0] != "compute" || cmd.args[1] != "ssh" {
+    if !is_gcloud_compute_ssh(cmd) {
         return None;
     }
 
-    let args = &cmd.args[2..];
-    let mut host = None;
-    let mut inner_parts = Vec::new();
-    let mut skip_next = false;
-    let mut found_separator = false;
+    let (host, inner_parts) = split_gcloud_ssh_args(&cmd.args[2..]);
 
-    // Options that take an argument
+    Some(UnwrapResult {
+        inner_command: join_remote_command(&inner_parts),
+        host,
+        wrapper: "gcloud compute ssh".to_string(),
+    })
+}
+
+fn is_gcloud_compute_ssh(cmd: &Command) -> bool {
+    cmd.args.len() >= 2 && cmd.args[0] == "compute" && cmd.args[1] == "ssh"
+}
+
+fn is_command_separator(arg: &str) -> bool {
+    arg == "--"
+}
+
+fn is_gcloud_option(arg: &str, opts_with_args: &[&str]) -> bool {
+    arg.starts_with('-') && !is_command_separator(arg) && !opts_with_args.contains(&arg)
+        || opts_with_args.iter().any(|opt| arg.starts_with(opt))
+}
+
+fn option_consumes_next(arg: &str, opts_with_args: &[&str]) -> bool {
+    !arg.contains('=') && opts_with_args.iter().any(|opt| arg.starts_with(opt))
+}
+
+fn split_gcloud_ssh_args(args: &[String]) -> (Option<String>, Vec<String>) {
     let opts_with_args = [
         "--zone",
         "--project",
@@ -37,55 +56,40 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
         "--ssh-flag",
         "--command",
     ];
+    let mut host = None;
+    let mut inner_parts = Vec::new();
+    let mut skip_next = false;
+    let mut found_separator = false;
 
     for arg in args {
         if skip_next {
             skip_next = false;
             continue;
         }
-
-        // After -- everything is the command
         if found_separator {
             inner_parts.push(arg.clone());
             continue;
         }
-
-        if arg == "--" {
+        if is_command_separator(arg) {
             found_separator = true;
             continue;
         }
-
-        if arg.starts_with('-') {
-            // Handle --opt=value format
-            if arg.contains('=') {
-                continue;
-            }
-            // Check if this option takes an argument
-            if opts_with_args.iter().any(|o| arg.starts_with(o)) {
-                skip_next = true;
-            }
+        if is_gcloud_option(arg, &opts_with_args) {
+            skip_next = option_consumes_next(arg, &opts_with_args);
             continue;
         }
-
-        // Non-flag, non-separator: this is the instance name (host)
-        if host.is_none() {
-            host = Some(arg.clone());
-        }
+        host.get_or_insert_with(|| arg.clone());
     }
 
-    let inner_command = if inner_parts.is_empty() {
-        None
-    } else if inner_parts.len() == 1 {
-        Some(strip_quotes(&inner_parts[0]))
-    } else {
-        Some(inner_parts.join(" "))
-    };
+    (host, inner_parts)
+}
 
-    Some(UnwrapResult {
-        inner_command,
-        host,
-        wrapper: "gcloud compute ssh".to_string(),
-    })
+fn join_remote_command(inner_parts: &[String]) -> Option<String> {
+    match inner_parts {
+        [] => None,
+        [single] => Some(strip_quotes(single)),
+        _ => Some(inner_parts.join(" ")),
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +100,6 @@ mod tests {
         Command {
             name: "gcloud".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("gcloud {}", args.join(" ")),
         }
     }
 

@@ -114,7 +114,6 @@ mod tests {
         Command {
             name: "bwrap".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("bwrap {}", args.join(" ")),
         }
     }
 

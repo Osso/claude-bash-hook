@@ -170,73 +170,84 @@ fn extract_php_code(cmd: &Command) -> Option<&str> {
 
 /// Check if PHP code only uses read-only functions
 fn is_readonly_php(code: &str) -> bool {
-    // Simple heuristic: extract function calls and check against allowlist
-    // This matches patterns like: func_name( or func_name (
     let code_lower = code.to_lowercase();
-
-    // Look for function calls - pattern: word followed by (
     let mut i = 0;
     let bytes = code_lower.as_bytes();
 
     while i < bytes.len() {
-        // Skip to start of potential function name
-        while i < bytes.len() && !bytes[i].is_ascii_alphabetic() && bytes[i] != b'_' {
-            i += 1;
-        }
-
-        if i >= bytes.len() {
+        let Some(start) = next_identifier_start(bytes, i) else {
             break;
+        };
+        let (word, next_index) = read_identifier(&code_lower, bytes, start);
+        i = skip_whitespace(bytes, next_index);
+
+        if is_php_call(bytes, i)
+            && !is_non_function_call(&code_lower, start)
+            && !is_allowed_php_call(word)
+        {
+            return false;
         }
 
-        // Check if preceded by -> (method call) or "new " (constructor)
-        let is_method_call = i >= 2 && &code_lower[i - 2..i] == "->";
-        let is_constructor = i >= 4 && &code_lower[i - 4..i] == "new ";
-
-        // Extract word
-        let start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        if is_php_call(bytes, i) {
             i += 1;
-        }
-
-        let word = &code_lower[start..i];
-
-        // Skip whitespace
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-
-        // Check if followed by ( - this is a function call
-        if i < bytes.len() && bytes[i] == b'(' && !is_method_call && !is_constructor {
-            // Check if this function is in our allowlist
-            if !READONLY_FUNCTIONS
-                .iter()
-                .any(|f| f.eq_ignore_ascii_case(word))
-            {
-                // Also allow PHP language constructs that look like functions
-                if !matches!(
-                    word,
-                    "if" | "else"
-                        | "elseif"
-                        | "while"
-                        | "for"
-                        | "foreach"
-                        | "switch"
-                        | "case"
-                        | "array"
-                        | "list"
-                        | "new"
-                        | "require"
-                        | "require_once"
-                        | "include"
-                        | "include_once"
-                ) {
-                    return false;
-                }
-            }
         }
     }
 
     true
+}
+
+fn next_identifier_start(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while index < bytes.len() && !bytes[index].is_ascii_alphabetic() && bytes[index] != b'_' {
+        index += 1;
+    }
+    (index < bytes.len()).then_some(index)
+}
+
+fn read_identifier<'a>(code: &'a str, bytes: &[u8], start: usize) -> (&'a str, usize) {
+    let mut end = start;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    (&code[start..end], end)
+}
+
+fn skip_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn is_php_call(bytes: &[u8], index: usize) -> bool {
+    index < bytes.len() && bytes[index] == b'('
+}
+
+fn is_non_function_call(code: &str, index: usize) -> bool {
+    (index >= 2 && &code[index - 2..index] == "->")
+        || (index >= 4 && &code[index - 4..index] == "new ")
+}
+
+fn is_allowed_php_call(word: &str) -> bool {
+    READONLY_FUNCTIONS
+        .iter()
+        .any(|function| function.eq_ignore_ascii_case(word))
+        || matches!(
+            word,
+            "if" | "else"
+                | "elseif"
+                | "while"
+                | "for"
+                | "foreach"
+                | "switch"
+                | "case"
+                | "array"
+                | "list"
+                | "new"
+                | "require"
+                | "require_once"
+                | "include"
+                | "include_once"
+        )
 }
 
 /// Check if a php command is read-only
@@ -271,7 +282,6 @@ mod tests {
         Command {
             name: "php".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("php {}", args.join(" ")),
         }
     }
 
@@ -332,7 +342,6 @@ mod tests {
         let cmd = Command {
             name: "python".to_string(),
             args: vec!["-c".to_string(), "print('hello')".to_string()],
-            text: "python -c print('hello')".to_string(),
         };
         let result = check_php_script(&cmd);
         assert!(result.is_none());

@@ -115,19 +115,7 @@ fn extract_urls(args: &[String]) -> Vec<String> {
         }
 
         if arg.starts_with('-') {
-            if arg.contains('=') {
-                continue;
-            } else if arg.len() > 2 && !arg.starts_with("--") {
-                // Combined short opts like -sLA - check if ANY takes an argument
-                for c in arg[1..].chars() {
-                    let opt = format!("-{}", c);
-                    if OPTS_WITH_ARGS.contains(&opt.as_str()) {
-                        skip_next = true;
-                    }
-                }
-            } else if OPTS_WITH_ARGS.contains(&arg.as_str()) {
-                skip_next = true;
-            }
+            skip_next = curl_option_consumes_next(arg);
             continue;
         }
 
@@ -135,6 +123,23 @@ fn extract_urls(args: &[String]) -> Vec<String> {
     }
 
     urls
+}
+
+fn curl_option_consumes_next(arg: &str) -> bool {
+    if arg.contains('=') {
+        return false;
+    }
+
+    OPTS_WITH_ARGS.contains(&arg) || has_short_option_with_value(arg)
+}
+
+fn has_short_option_with_value(arg: &str) -> bool {
+    arg.len() > 2
+        && !arg.starts_with("--")
+        && arg[1..].chars().any(|ch| {
+            let option = format!("-{}", ch);
+            OPTS_WITH_ARGS.contains(&option.as_str())
+        })
 }
 
 /// Check a curl command and extract URL hosts
@@ -222,7 +227,6 @@ mod tests {
         Command {
             name: "curl".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("curl {}", args.join(" ")),
         }
     }
 
@@ -311,7 +315,6 @@ mod tests {
         let cmd = Command {
             name: "wget".to_string(),
             args: vec!["http://localhost".to_string()],
-            text: "wget http://localhost".to_string(),
         };
         let result = check_curl(&cmd, &config, ExecContext::default());
         assert!(result.is_none());

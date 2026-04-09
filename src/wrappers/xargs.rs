@@ -6,11 +6,6 @@ use crate::wrappers::UnwrapResult;
 /// Unwrap xargs command
 /// xargs [options] [command [args...]]
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
-    let mut inner_parts = Vec::new();
-    let mut skip_next = false;
-    let mut found_command = false;
-
-    // Options that take an argument
     let opts_with_args = [
         "-I",
         "--replace",
@@ -28,40 +23,8 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
         "--arg-file",
         "-E",
     ];
-
-    for arg in &cmd.args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-
-        if found_command {
-            inner_parts.push(arg.clone());
-            continue;
-        }
-
-        if arg.starts_with('-') {
-            // Check if this option takes an argument
-            let opt = if arg.contains('=') {
-                // --flag=value format, no need to skip next
-                continue;
-            } else {
-                arg.as_str()
-            };
-
-            if opts_with_args.contains(&opt) {
-                skip_next = true;
-            }
-            continue;
-        }
-
-        // First non-option is the command
-        found_command = true;
-        inner_parts.push(arg.clone());
-    }
-
+    let inner_parts = collect_xargs_command(&cmd.args, &opts_with_args);
     if inner_parts.is_empty() {
-        // xargs with no command defaults to echo, which is allowed
         return Some(UnwrapResult {
             inner_command: Some("echo".to_string()),
             host: None,
@@ -76,6 +39,35 @@ pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
     })
 }
 
+fn collect_xargs_command(args: &[String], opts_with_args: &[&str]) -> Vec<String> {
+    let mut skip_next = false;
+    let mut inner_parts = Vec::new();
+
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if !inner_parts.is_empty() {
+            inner_parts.push(arg.clone());
+            continue;
+        }
+        if arg.contains('=') {
+            continue;
+        }
+        if opts_with_args.contains(&arg.as_str()) {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        inner_parts.push(arg.clone());
+    }
+
+    inner_parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,7 +76,6 @@ mod tests {
         Command {
             name: "xargs".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("xargs {}", args.join(" ")),
         }
     }
 

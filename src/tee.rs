@@ -46,37 +46,26 @@ pub fn check_tee(cmd: &Command, _initial_cwd: Option<&str>) -> Option<Permission
 
 /// Check if a path is safely under /tmp/
 fn is_safe_tmp_path(path: &str) -> bool {
-    // Quick sanity checks before running realpath
-    if path.is_empty() {
+    if has_invalid_path_chars(path) {
         return false;
     }
 
-    // Reject paths with null bytes or other suspicious characters
-    if path.contains('\0') || path.contains('\n') {
+    let Some(resolved) = resolve_path(path).or_else(|| resolve_existing_parent(path)) else {
         return false;
-    }
-
-    // Use realpath to resolve the path
-    let resolved = match resolve_path(path) {
-        Some(p) => p,
-        None => {
-            // realpath failed - path might not exist
-            // Try to check the parent directory for paths that don't exist yet
-            if let Some(parent) = std::path::Path::new(path).parent() {
-                if let Some(parent_str) = parent.to_str() {
-                    if !parent_str.is_empty() {
-                        if let Some(resolved_parent) = resolve_path(parent_str) {
-                            // Check if parent is under /tmp
-                            return is_under_tmp(&resolved_parent);
-                        }
-                    }
-                }
-            }
-            return false;
-        }
     };
-
     is_under_tmp(&resolved)
+}
+
+fn has_invalid_path_chars(path: &str) -> bool {
+    path.is_empty() || path.contains('\0') || path.contains('\n')
+}
+
+fn resolve_existing_parent(path: &str) -> Option<String> {
+    let parent = std::path::Path::new(path).parent()?;
+    let parent = parent.to_str()?;
+    (!parent.is_empty())
+        .then_some(parent)
+        .and_then(resolve_path)
 }
 
 /// Check if a resolved path is under /tmp/
@@ -131,7 +120,6 @@ mod tests {
         Command {
             name: "tee".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("tee {}", args.join(" ")),
         }
     }
 
@@ -175,7 +163,6 @@ mod tests {
         let cmd = Command {
             name: "cat".to_string(),
             args: vec!["/tmp/test.log".to_string()],
-            text: "cat /tmp/test.log".to_string(),
         };
         let result = check_tee(&cmd, None);
         assert!(result.is_none());

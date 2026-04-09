@@ -41,7 +41,6 @@ mod tests {
         Command {
             name: "rsync".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("rsync {}", args.join(" ")),
         }
     }
 

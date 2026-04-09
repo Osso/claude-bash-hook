@@ -21,6 +21,8 @@ mod sql;
 mod subagent_tracker;
 mod tar;
 mod tee;
+#[cfg(test)]
+mod test_support;
 mod tool_handlers;
 mod wrappers;
 

@@ -332,40 +332,20 @@ fn check_database(
     piped_query: Option<&str>,
 ) -> Option<PermissionResult> {
     if config.is_mysql_alias(&cmd.name) {
-        if let Some(result) = sql::check_mysql_query(cmd) {
-            return Some(result);
-        }
-        if let Some(query) = piped_query {
-            return Some(sql::check_piped_query(query));
-        }
+        return check_database_query(sql::check_mysql_query(cmd), piped_query);
     }
     if cmd.name == "sqlite3" {
-        if let Some(result) = sql::check_sqlite3_query(cmd) {
-            return Some(result);
-        }
-        if let Some(query) = piped_query {
-            return Some(sql::check_piped_query(query));
-        }
+        return check_database_query(sql::check_sqlite3_query(cmd), piped_query);
     }
     if cmd.name == "clickhouse-client" {
-        if let Some(result) = sql::check_clickhouse_query(cmd) {
-            return Some(result);
-        }
-        if let Some(query) = piped_query {
-            return Some(sql::check_piped_query(query));
-        }
+        return check_database_query(sql::check_clickhouse_query(cmd), piped_query);
     }
     if cmd
         .args
         .first()
         .is_some_and(|sub| config.is_positional_sql_command(&cmd.name, sub))
     {
-        if let Some(result) = sql::check_positional_sql_query(cmd) {
-            return Some(result);
-        }
-        if let Some(query) = piped_query {
-            return Some(sql::check_piped_query(query));
-        }
+        return check_database_query(sql::check_positional_sql_query(cmd), piped_query);
     }
     if cmd.name == "redis-cli" || cmd.name == "valkey-cli" {
         return redis::check_redis_cli(cmd);
@@ -452,56 +432,77 @@ fn check_misc(
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
 ) -> Option<PermissionResult> {
-    if cmd.name == "magick" && cmd.args.last().is_some_and(|a| a == "info:") {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "magick with info: output".to_string(),
-            suggestion: None,
-        });
+    allow_magick_info(cmd)
+        .or_else(|| allow_curl(cmd, config, ctx))
+        .or_else(|| allow_help_request(cmd))
+        .or_else(|| allow_version_request(cmd))
+        .or_else(|| allow_tmp_script(cmd))
+        .or_else(|| cargo::check_target_binary(cmd, virtual_cwd, initial_cwd))
+        .or_else(|| allow_virtual_cwd_match(cmd, config, ctx, virtual_cwd, initial_cwd))
+}
+
+fn check_database_query(
+    direct_result: Option<PermissionResult>,
+    piped_query: Option<&str>,
+) -> Option<PermissionResult> {
+    direct_result.or_else(|| piped_query.map(sql::check_piped_query))
+}
+
+fn allow_magick_info(cmd: &analyzer::Command) -> Option<PermissionResult> {
+    (cmd.name == "magick" && cmd.args.last().is_some_and(|arg| arg == "info:"))
+        .then(|| allow_reason("magick with info: output"))
+}
+
+fn allow_curl(
+    cmd: &analyzer::Command,
+    config: &Config,
+    ctx: ExecContext,
+) -> Option<PermissionResult> {
+    (cmd.name == "curl")
+        .then(|| curl::check_curl(cmd, config, ctx))
+        .flatten()
+}
+
+fn allow_help_request(cmd: &analyzer::Command) -> Option<PermissionResult> {
+    has_any_arg(cmd, &["--help", "-h", "help"]).then(|| allow_reason("help request"))
+}
+
+fn allow_version_request(cmd: &analyzer::Command) -> Option<PermissionResult> {
+    has_any_arg(cmd, &["--version", "-V", "version"]).then(|| allow_reason("version check"))
+}
+
+fn allow_tmp_script(cmd: &analyzer::Command) -> Option<PermissionResult> {
+    cmd.name
+        .starts_with("/tmp/")
+        .then(|| allow_reason("script in /tmp"))
+}
+
+fn allow_virtual_cwd_match(
+    cmd: &analyzer::Command,
+    config: &Config,
+    ctx: ExecContext,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+) -> Option<PermissionResult> {
+    let cwd = virtual_cwd?;
+    if Some(cwd) == initial_cwd {
+        return None;
     }
-    if cmd.name == "curl" {
-        if let Some(result) = curl::check_curl(cmd, config, ctx) {
-            return Some(result);
-        }
-    }
-    if cmd
-        .args
+
+    let result = config.check_command_with_cwd(&cmd.name, &cmd.args, Some(cwd), ctx);
+    (result.permission == Permission::Allow).then_some(result)
+}
+
+fn has_any_arg(cmd: &analyzer::Command, needles: &[&str]) -> bool {
+    cmd.args
         .iter()
-        .any(|a| a == "--help" || a == "-h" || a == "help")
-    {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "help request".to_string(),
-            suggestion: None,
-        });
+        .any(|arg| needles.iter().any(|needle| arg == needle))
+}
+
+fn allow_reason(reason: &str) -> PermissionResult {
+    PermissionResult {
+        permission: Permission::Allow,
+        reason: reason.to_string(),
+        suggestion: None,
     }
-    if cmd
-        .args
-        .iter()
-        .any(|a| a == "--version" || a == "-V" || a == "version")
-    {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "version check".to_string(),
-            suggestion: None,
-        });
-    }
-    if cmd.name.starts_with("/tmp/") {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "script in /tmp".to_string(),
-            suggestion: None,
-        });
-    }
-    if let Some(result) = cargo::check_target_binary(cmd, virtual_cwd, initial_cwd) {
-        return Some(result);
-    }
-    // Try virtual_cwd before initial_cwd for cd-then-run patterns
-    if virtual_cwd.is_some() && virtual_cwd != initial_cwd {
-        let result = config.check_command_with_cwd(&cmd.name, &cmd.args, virtual_cwd, ctx);
-        if result.permission == Permission::Allow {
-            return Some(result);
-        }
-    }
-    None
 }

@@ -48,42 +48,38 @@ pub fn check_rm(
 
 /// Check if a path is safe to delete (under /tmp/ or project dir)
 fn is_safe_path(path: &str, virtual_cwd: Option<&str>, initial_cwd: Option<&str>) -> bool {
-    if path.is_empty() {
+    if has_invalid_path_chars(path) {
         return false;
     }
 
-    if path.contains('\0') || path.contains('\n') {
-        return false;
-    }
-
-    // Make path absolute using virtual_cwd if relative
-    let abs_path = if Path::new(path).is_absolute() {
-        path.to_string()
-    } else if let Some(cwd) = virtual_cwd {
-        format!("{}/{}", cwd.trim_end_matches('/'), path)
-    } else {
-        // No virtual_cwd and relative path - can't safely resolve
+    let Some(abs_path) = absolute_path(path, virtual_cwd) else {
         return false;
     };
-
-    let resolved = match resolve_path(&abs_path) {
-        Some(p) => p,
-        None => {
-            // Path doesn't exist - check parent
-            if let Some(parent) = Path::new(&abs_path).parent() {
-                if let Some(parent_str) = parent.to_str() {
-                    if !parent_str.is_empty() {
-                        if let Some(resolved_parent) = resolve_path(parent_str) {
-                            return is_under_allowed_dir(&resolved_parent, initial_cwd);
-                        }
-                    }
-                }
-            }
-            return false;
-        }
+    let Some(resolved) = resolve_path(&abs_path).or_else(|| resolve_existing_parent(&abs_path))
+    else {
+        return false;
     };
-
     is_under_allowed_dir(&resolved, initial_cwd)
+}
+
+fn has_invalid_path_chars(path: &str) -> bool {
+    path.is_empty() || path.contains('\0') || path.contains('\n')
+}
+
+fn absolute_path(path: &str, virtual_cwd: Option<&str>) -> Option<String> {
+    if Path::new(path).is_absolute() {
+        return Some(path.to_string());
+    }
+
+    virtual_cwd.map(|cwd| format!("{}/{}", cwd.trim_end_matches('/'), path))
+}
+
+fn resolve_existing_parent(path: &str) -> Option<String> {
+    let parent = Path::new(path).parent()?;
+    let parent = parent.to_str()?;
+    (!parent.is_empty())
+        .then_some(parent)
+        .and_then(resolve_path)
 }
 
 /// Check if a resolved path is under /tmp/ or project dir
@@ -139,7 +135,6 @@ mod tests {
         Command {
             name: "rm".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("rm {}", args.join(" ")),
         }
     }
 
@@ -212,7 +207,6 @@ mod tests {
         let cmd = Command {
             name: "ls".to_string(),
             args: vec!["/tmp".to_string()],
-            text: "ls /tmp".to_string(),
         };
         let result = check_rm(&cmd, None, None);
         assert!(result.is_none());

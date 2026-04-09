@@ -115,55 +115,42 @@ pub fn check_docker_compose_run(cmd: &Command) -> Option<PermissionResult> {
 fn has_rw_bind_mount(args: &[&str]) -> bool {
     let mut i = 0;
     while i < args.len() {
-        let arg = args[i];
-
-        // Handle -v/--volume
-        if arg == "-v" || arg == "--volume" {
-            if let Some(volume) = args.get(i + 1) {
-                if is_rw_bind_mount(volume) {
-                    return true;
-                }
-                i += 2;
-                continue;
-            }
+        if has_inline_rw_mount(args[i]) || has_following_rw_mount(args, i) {
+            return true;
         }
 
-        // Handle -v=value or --volume=value
-        if let Some(volume) = arg
-            .strip_prefix("-v=")
-            .or_else(|| arg.strip_prefix("--volume="))
-        {
-            if is_rw_bind_mount(volume) {
-                return true;
-            }
-            i += 1;
-            continue;
-        }
-
-        // Handle --mount
-        if arg == "--mount" {
-            if let Some(mount) = args.get(i + 1) {
-                if is_rw_mount(mount) {
-                    return true;
-                }
-                i += 2;
-                continue;
-            }
-        }
-
-        // Handle --mount=value
-        if let Some(mount) = arg.strip_prefix("--mount=") {
-            if is_rw_mount(mount) {
-                return true;
-            }
-            i += 1;
-            continue;
-        }
-
-        i += 1;
+        i += consumed_mount_args(args, i);
     }
 
     false
+}
+
+fn has_inline_rw_mount(arg: &str) -> bool {
+    arg.strip_prefix("-v=")
+        .map(is_rw_bind_mount)
+        .or_else(|| arg.strip_prefix("--volume=").map(is_rw_bind_mount))
+        .or_else(|| arg.strip_prefix("--mount=").map(is_rw_mount))
+        .unwrap_or(false)
+}
+
+fn has_following_rw_mount(args: &[&str], index: usize) -> bool {
+    let arg = args[index];
+    if arg == "-v" || arg == "--volume" {
+        return args
+            .get(index + 1)
+            .is_some_and(|volume| is_rw_bind_mount(volume));
+    }
+    if arg == "--mount" {
+        return args.get(index + 1).is_some_and(|mount| is_rw_mount(mount));
+    }
+    false
+}
+
+fn consumed_mount_args(args: &[&str], index: usize) -> usize {
+    match args[index] {
+        "-v" | "--volume" | "--mount" if args.get(index + 1).is_some() => 2,
+        _ => 1,
+    }
 }
 
 /// Check if a -v volume spec is a dangerous read-write bind mount
@@ -239,13 +226,10 @@ fn is_rw_mount(mount: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::make_command;
 
     fn make_cmd(args: &[&str]) -> Command {
-        Command {
-            name: "docker".to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("docker {}", args.join(" ")),
-        }
+        make_command("docker", args)
     }
 
     #[test]

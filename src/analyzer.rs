@@ -11,9 +11,6 @@ pub struct Command {
     pub name: String,
     /// All arguments including flags (e.g., ["-la", "/tmp"])
     pub args: Vec<String>,
-    /// The full command text (for debugging)
-    #[allow(dead_code)]
-    pub text: String,
 }
 
 /// Result of analyzing a bash command
@@ -166,60 +163,58 @@ fn extract_command(node: Node, source: &[u8]) -> Option<Command> {
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        match child.kind() {
-            "command_name" => {
-                name = get_text(child, source);
-            }
-            "word"
+        if child.kind() == "command_name" {
+            name = get_text(child, source);
+            continue;
+        }
+
+        if is_inline_argument(child) {
+            args.push(get_text(child, source));
+        }
+    }
+
+    add_field_arguments(node, source, &mut args);
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(Command { name, args })
+}
+
+/// Get the text content of a node
+fn get_text(node: Node, source: &[u8]) -> String {
+    node.utf8_text(source).unwrap_or("").to_string()
+}
+
+fn is_inline_argument(child: Node) -> bool {
+    matches!(
+        child.kind(),
+        "word"
             | "string"
             | "raw_string"
             | "number"
             | "concatenation"
             | "simple_expansion"
             | "expansion"
-            | "command_substitution" => {
-                // These are arguments
-                if child.is_named() {
-                    // Check if this is actually an argument field
-                    args.push(get_text(child, source));
-                }
-            }
-            _ => {
-                // Handle nested literals in arguments
-                if child.is_named() {
-                    // Check parent field name
-                    let field_name = node.field_name_for_child(child.id() as u32);
-                    if field_name == Some("argument") {
-                        args.push(get_text(child, source));
-                    }
-                }
-            }
-        }
-    }
-
-    // Also check for arguments using field iteration
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            if let Some(field) = node.field_name_for_child(i as u32) {
-                if field == "argument" && !args.iter().any(|a| a == &get_text(child, source)) {
-                    args.push(get_text(child, source));
-                }
-            }
-        }
-    }
-
-    if name.is_empty() {
-        return None;
-    }
-
-    let text = get_text(node, source);
-
-    Some(Command { name, args, text })
+            | "command_substitution"
+    ) && child.is_named()
 }
 
-/// Get the text content of a node
-fn get_text(node: Node, source: &[u8]) -> String {
-    node.utf8_text(source).unwrap_or("").to_string()
+fn add_field_arguments(node: Node, source: &[u8], args: &mut Vec<String>) {
+    for i in 0..node.child_count() {
+        let Some(child) = node.child(i) else {
+            continue;
+        };
+        if node.field_name_for_child(i as u32) != Some("argument") {
+            continue;
+        }
+
+        let text = get_text(child, source);
+        if !args.iter().any(|arg| arg == &text) {
+            args.push(text);
+        }
+    }
 }
 
 #[cfg(test)]

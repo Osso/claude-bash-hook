@@ -6,56 +6,48 @@ use crate::wrappers::UnwrapResult;
 /// Unwrap timeout command
 /// timeout [options] DURATION COMMAND [args...]
 pub fn unwrap(cmd: &Command) -> Option<UnwrapResult> {
-    let mut inner_parts = Vec::new();
-    let mut skip_next = false;
-    let mut found_duration = false;
-    let mut found_command = false;
-
     let opts_with_args = ["-k", "--kill-after", "-s", "--signal"];
-
-    for arg in &cmd.args {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-
-        if found_command {
-            inner_parts.push(arg.clone());
-            continue;
-        }
-
-        if arg.starts_with('-') {
-            let opt = if arg.contains('=') {
-                continue;
-            } else {
-                arg.as_str()
-            };
-            if opts_with_args.contains(&opt) {
-                skip_next = true;
-            }
-            continue;
-        }
-
-        if !found_duration {
-            // First positional arg is duration, skip it
-            found_duration = true;
-            continue;
-        }
-
-        // This is the command
-        found_command = true;
-        inner_parts.push(arg.clone());
-    }
-
-    if inner_parts.is_empty() {
-        return None;
-    }
+    let inner_parts = collect_timeout_command(&cmd.args, &opts_with_args)?;
 
     Some(UnwrapResult {
         inner_command: Some(inner_parts.join(" ")),
         host: None,
         wrapper: "timeout".to_string(),
     })
+}
+
+fn collect_timeout_command(args: &[String], opts_with_args: &[&str]) -> Option<Vec<String>> {
+    let mut skip_next = false;
+    let mut saw_duration = false;
+    let mut inner_parts = Vec::new();
+
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if !inner_parts.is_empty() {
+            inner_parts.push(arg.clone());
+            continue;
+        }
+        if arg.contains('=') {
+            continue;
+        }
+        if opts_with_args.contains(&arg.as_str()) {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        if !saw_duration {
+            saw_duration = true;
+            continue;
+        }
+        inner_parts.push(arg.clone());
+    }
+
+    (!inner_parts.is_empty()).then_some(inner_parts)
 }
 
 #[cfg(test)]
@@ -66,7 +58,6 @@ mod tests {
         Command {
             name: "timeout".to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            text: format!("timeout {}", args.join(" ")),
         }
     }
 
