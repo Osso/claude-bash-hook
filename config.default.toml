@@ -77,7 +77,7 @@ reason = "force switch can discard changes"
 
 # Git safe operations (git push handled specially in code)
 [[rules]]
-commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit", "git push", "git init", "git clone", "git worktree"]
+commands = ["git switch", "git restore", "git pull", "git add", "git rm", "git fetch", "git commit", "git push", "git init", "git clone", "git worktree", "git stash"]
 permission = "allow"
 main_thread_permission = "allow"
 reason = "safe git operations"
