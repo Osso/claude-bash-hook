@@ -607,6 +607,144 @@ fn test_sentry_with_slug_flag() {
 }
 
 #[test]
+fn test_apply_aliases_rewrites_command_name() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.apply_aliases("fdfind deploy.sh ."),
+        Some("fd deploy.sh .".to_string())
+    );
+}
+
+#[test]
+fn test_apply_aliases_no_match() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(config.apply_aliases("ls -la"), None);
+}
+
+#[test]
+fn test_apply_aliases_word_boundary() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fd"
+        to = "fdfind"
+    "#,
+    )
+    .unwrap();
+    // "fdfind" starts with "fd" but "fd" is not at a word boundary end here
+    assert_eq!(config.apply_aliases("fdfind foo"), None);
+}
+
+#[test]
+fn test_apply_aliases_in_pipeline() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.apply_aliases("echo test | fdfind foo"),
+        Some("echo test | fd foo".to_string())
+    );
+}
+
+#[test]
+fn test_apply_aliases_after_semicolon() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.apply_aliases("cd /tmp; fdfind foo"),
+        Some("cd /tmp; fd foo".to_string())
+    );
+}
+
+#[test]
+fn test_apply_aliases_after_and() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.apply_aliases("true && fdfind foo"),
+        Some("true && fd foo".to_string())
+    );
+}
+
+#[test]
+fn test_apply_aliases_multiple() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+
+        [[aliases]]
+        from = "batcat"
+        to = "bat"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.apply_aliases("fdfind foo | batcat"),
+        Some("fd foo | bat".to_string())
+    );
+}
+
+#[test]
+fn test_apply_aliases_command_alone() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(config.apply_aliases("fdfind"), Some("fd".to_string()));
+}
+
+#[test]
+fn test_apply_aliases_no_partial_word() {
+    let config: Config = toml::from_str(
+        r#"
+        [[aliases]]
+        from = "grep"
+        to = "rg"
+    "#,
+    )
+    .unwrap();
+    // "grepping" should not be rewritten — not a word boundary after "grep"
+    assert_eq!(config.apply_aliases("grepping files"), None);
+}
+
+#[test]
 fn test_git_worktree_with_c_flag() {
     let config = test_config();
     // git -C /path worktree add /tmp/claude/wow-mid a0374cc

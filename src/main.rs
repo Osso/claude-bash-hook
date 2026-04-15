@@ -276,9 +276,19 @@ fn build_reason(command: &str, result: &PermissionResult, config: &Config) -> St
     }
 }
 
-fn emit_decision(command: &str, result: &PermissionResult, config: &Config) {
+fn emit_decision(
+    command: &str,
+    result: &PermissionResult,
+    config: &Config,
+    alias_command: Option<&str>,
+) {
     let reason = build_reason(command, result, config);
-    let updated_input = rewrite::maybe_rewrite(command, result, config);
+    let rewrite_input = rewrite::maybe_rewrite(command, result, config);
+    let updated_input = match (alias_command, rewrite_input) {
+        (_, Some(rw)) => Some(rw), // rewrite already uses the aliased command string
+        (Some(aliased), None) => Some(serde_json::json!({ "command": aliased })),
+        (None, None) => None,
+    };
     let decision = match result.permission {
         Permission::Allow => "allow",
         Permission::Ask => "ask",
@@ -341,15 +351,27 @@ fn main() {
         return;
     }
 
-    let Some(ref command) = hook_input.tool_input.command else {
+    let Some(ref original_command) = hook_input.tool_input.command else {
         return;
     };
+
+    // Apply command aliases before analysis
+    let alias_rewritten = config.apply_aliases(original_command);
+    let command = alias_rewritten.as_deref().unwrap_or(original_command);
 
     let Some(result) = analyze_and_resolve(&hook_input, &config, command, is_nushell) else {
         info!(
             "decision=passthrough session={:?} command={:?}",
             hook_input.session_id, command
         );
+        // If alias was applied, emit allow with updatedInput so Claude sees the rewritten command
+        if alias_rewritten.is_some() {
+            output_decision(
+                "allow",
+                "alias rewrite",
+                Some(serde_json::json!({ "command": command })),
+            );
+        }
         return;
     };
 
@@ -360,7 +382,7 @@ fn main() {
         command,
         result.reason
     );
-    emit_decision(command, &result, &config);
+    emit_decision(command, &result, &config, alias_rewritten.as_deref());
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use crate::config::{Config, ExecContext, Permission};
-use crate::{analyze_command, check_write_path};
+use crate::{analyze_command, check_write_path, parse_hook_input, serialize_hook_output};
 use std::path::Path;
 
 fn test_config() -> Config {
@@ -651,6 +651,42 @@ fn test_subagent_context_allows_unmatched_commands() {
         None,
     );
     assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_alias_rewrite_produces_updated_input() {
+    // Config with an alias: fdfind -> fd, and fd is allowed
+    let config: Config = toml::from_str(
+        r#"
+        default = "passthrough"
+        [[aliases]]
+        from = "fdfind"
+        to = "fd"
+        [[rules]]
+        commands = ["fd"]
+        permission = "allow"
+        reason = "file finder"
+    "#,
+    )
+    .unwrap();
+
+    // apply_aliases should rewrite "fdfind ." to "fd ."
+    let rewritten = config.apply_aliases("fdfind .");
+    assert_eq!(rewritten, Some("fd .".to_string()));
+
+    // The rewritten command should be allowed
+    let result = analyze_command("fd .", &config, ExecContext::default(), None);
+    assert_eq!(result.permission, Permission::Allow);
+
+    // emit_decision path: serialize_hook_output with updatedInput
+    let json = serialize_hook_output(
+        "allow",
+        "file finder",
+        Some(serde_json::json!({ "command": "fd ." })),
+    )
+    .expect("serialized");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["updatedInput"]["command"], "fd .");
 }
 
 #[test]

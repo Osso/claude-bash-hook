@@ -27,6 +27,12 @@ enable_advice = false
 # Format: "command subcommand" — e.g., "groundcover-cli sql-clickhouse"
 positional_sql_commands = []
 
+# Command aliases — rewrite command names before analysis.
+# Useful for distro-specific names (e.g., fdfind -> fd, batcat -> bat).
+# [[aliases]]
+# from = "fdfind"
+# to = "fd"
+
 # Rules are checked in order - first match wins
 # More specific rules should come before general ones
 #

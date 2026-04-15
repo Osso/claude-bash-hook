@@ -75,6 +75,10 @@ opts_with_args = ["-u", "-g"]  # Options that consume the next argument
 [[suggestions]]
 command = "git checkout"
 message = "Consider using 'git switch' instead"
+
+[[aliases]]
+from = "fdfind"
+to = "fd"
 ```
 
 ### Context Overrides

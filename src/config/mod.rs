@@ -99,6 +99,10 @@ pub struct Config {
     /// Rewrite configuration for prepending a binary (e.g., rtk) to allowed commands
     #[serde(default)]
     pub rewrite: Option<RewriteConfig>,
+
+    /// Command aliases — rewrite command names before analysis
+    #[serde(default)]
+    pub aliases: Vec<AliasConfig>,
 }
 
 fn default_permission() -> String {
@@ -218,7 +222,93 @@ fn default_rewrite_binary() -> String {
     "rtk".to_string()
 }
 
+/// Command alias — rewrite one command name to another before analysis
+#[derive(Debug, Deserialize)]
+pub struct AliasConfig {
+    /// Command name to match (e.g., "fdfind")
+    pub from: String,
+    /// Command name to replace with (e.g., "fd")
+    pub to: String,
+}
+
+/// Replace occurrences of `from` at command-name positions in `s` with `to`.
+/// A command position is: start of string (after whitespace), or after |, ||, &&, ;, (, $(.
+/// Requires a word boundary after: whitespace, EOF, or shell metachar (;|&)>).
+fn replace_command_name(s: &str, from: &str, to: &str) -> String {
+    let bytes = s.as_bytes();
+    let from_bytes = from.as_bytes();
+    let from_len = from.len();
+    let mut result = String::with_capacity(s.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Check if position i is a command-name start
+        let at_command_pos = if i == 0 {
+            true
+        } else {
+            // Look at what precedes position i (skipping whitespace)
+            let mut j = i;
+            // skip leading whitespace before current position
+            // Actually check what non-whitespace char precedes the whitespace run before i
+            let pre = &bytes[..i];
+            // find last non-whitespace byte
+            let last_nonws = pre.iter().rposition(|&b| !b.is_ascii_whitespace());
+            match last_nonws {
+                None => true, // only whitespace before i
+                Some(k) => {
+                    let b = pre[k];
+                    // After |, &, ;, (, or end of $( sequence
+                    if b == b'|' || b == b';' || b == b'(' || b == b'&' {
+                        // skip whitespace between that char and i
+                        j = k + 1;
+                        while j < i && bytes[j].is_ascii_whitespace() {
+                            j += 1;
+                        }
+                        j == i
+                    } else {
+                        false
+                    }
+                }
+            }
+        };
+
+        if at_command_pos
+            && bytes[i..].starts_with(from_bytes)
+            && bytes.get(i + from_len).map_or(true, |&b| {
+                b.is_ascii_whitespace() || matches!(b, b';' | b'|' | b'&' | b')' | b'>')
+            })
+        {
+            result.push_str(to);
+            i += from_len;
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    result
+}
+
 impl Config {
+    /// Apply command aliases to a command string.
+    /// Replaces command names at word boundaries (first word, or first word after pipes/semicolons/&&/||).
+    /// Returns Some(rewritten) if any alias matched, None otherwise.
+    pub fn apply_aliases(&self, command: &str) -> Option<String> {
+        if self.aliases.is_empty() {
+            return None;
+        }
+        let mut result = command.to_string();
+        let mut changed = false;
+        for alias in &self.aliases {
+            let new = replace_command_name(&result, &alias.from, &alias.to);
+            if new != result {
+                result = new;
+                changed = true;
+            }
+        }
+        changed.then_some(result)
+    }
+
     /// Check if a command should be rewritten and return the rewritten command.
     /// Only call this for commands that were allowed.
     pub fn rewrite_command(&self, command: &str) -> Option<String> {
