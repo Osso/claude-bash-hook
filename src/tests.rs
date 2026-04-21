@@ -1,5 +1,6 @@
 use crate::config::{Config, ExecContext, Permission};
-use crate::{analyze_command, check_write_path, parse_hook_input, serialize_hook_output};
+use crate::{analyze_command, check_write_path, serialize_hook_output};
+use std::io::Write;
 use std::path::Path;
 
 fn test_config() -> Config {
@@ -706,4 +707,35 @@ fn test_is_subagent_from_counter() {
     // Cleanup
     subagent_tracker::decrement(session);
     assert!(!subagent_tracker::has_active_subagents(session));
+}
+
+// source / . builtin integration tests
+
+#[test]
+fn test_source_allowed_file() {
+    let config = test_config();
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    write!(f, "ls -la").unwrap();
+    let path = f.path().to_str().unwrap().to_string();
+
+    let cmd = format!("source {}", path);
+    let result = analyze_command(&cmd, &config, ExecContext::default(), None);
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_source_dangerous_file() {
+    let config = test_config();
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    write!(f, "rm -rf /").unwrap();
+    let path = f.path().to_str().unwrap().to_string();
+
+    let cmd = format!("source {}", path);
+    let result = analyze_command(&cmd, &config, ExecContext::default(), None);
+    // rm -rf / falls through to passthrough (not in allow list)
+    assert!(matches!(
+        result.permission,
+        Permission::Ask | Permission::Deny | Permission::Passthrough
+    ));
+    assert_ne!(result.permission, Permission::Allow);
 }

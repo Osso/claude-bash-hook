@@ -11,6 +11,7 @@ mod kubectl;
 mod rsync;
 mod scp;
 mod shell;
+mod source;
 mod ssh;
 mod terminal_remote;
 mod timeout;
@@ -30,8 +31,9 @@ pub struct UnwrapResult {
     pub wrapper: String,
 }
 
-/// Check if a command is a wrapper and unwrap it
-pub fn unwrap_command(cmd: &Command, config: &Config) -> Option<UnwrapResult> {
+/// Check if a command is a wrapper and unwrap it.
+/// `depth` tracks source-unwrap recursion; nested `source`/`.` are skipped at depth >= 1.
+pub fn unwrap_command(cmd: &Command, config: &Config, depth: u32) -> Option<UnwrapResult> {
     // Special handlers for complex wrappers
     match cmd.name.as_str() {
         "ssh" => return ssh::unwrap(cmd),
@@ -46,6 +48,8 @@ pub fn unwrap_command(cmd: &Command, config: &Config) -> Option<UnwrapResult> {
         "xargs" => return xargs::unwrap(cmd),
         "sh" | "bash" | "zsh" | "fish" | "nu" => return shell::unwrap(cmd),
         "bwrap" => return bwrap::unwrap(cmd),
+        // source/.  are only unwrapped at depth 0 to prevent recursive file reads
+        "source" | "." if depth == 0 => return source::unwrap(cmd),
         _ => {}
     }
 
@@ -124,7 +128,7 @@ mod tests {
     fn test_sudo_simple() {
         let config = test_config();
         let cmd = make_cmd("sudo", &["ls", "-la"]);
-        let result = unwrap_command(&cmd, &config).unwrap();
+        let result = unwrap_command(&cmd, &config, 0).unwrap();
         assert_eq!(result.inner_command, Some("ls -la".to_string()));
     }
 
@@ -132,7 +136,7 @@ mod tests {
     fn test_sudo_with_options() {
         let config = test_config();
         let cmd = make_cmd("sudo", &["-A", "-u", "root", "ls"]);
-        let result = unwrap_command(&cmd, &config).unwrap();
+        let result = unwrap_command(&cmd, &config, 0).unwrap();
         assert_eq!(result.inner_command, Some("ls".to_string()));
     }
 
@@ -140,7 +144,7 @@ mod tests {
     fn test_nice_with_flags() {
         let config = test_config();
         let cmd = make_cmd("nice", &["-n", "10", "ls", "-la"]);
-        let result = unwrap_command(&cmd, &config).unwrap();
+        let result = unwrap_command(&cmd, &config, 0).unwrap();
         assert_eq!(result.inner_command, Some("ls -la".to_string()));
     }
 }

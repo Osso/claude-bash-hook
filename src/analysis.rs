@@ -23,7 +23,7 @@ pub fn analyze_command(
     ctx: ExecContext,
     initial_cwd: Option<&str>,
 ) -> PermissionResult {
-    analyze_with_piped_query(command, config, ctx, initial_cwd, None, false)
+    analyze_with_piped_query(command, config, ctx, initial_cwd, None, false, 0)
 }
 
 /// Analyze a bash command with optional piped query context
@@ -34,6 +34,7 @@ pub fn analyze_with_piped_query(
     initial_cwd: Option<&str>,
     outer_piped_query: Option<&str>,
     is_remote: bool,
+    depth: u32,
 ) -> PermissionResult {
     let analysis = analyzer::analyze(command);
     if let Some(result) = check_analysis_errors(&analysis) {
@@ -58,6 +59,7 @@ pub fn analyze_with_piped_query(
             piped_query,
             Some(command),
             is_remote,
+            depth,
         );
         most_restrictive = Some(merge_restrictive(most_restrictive, result));
         update_virtual_cwd(&mut virtual_cwd, cmd, has_uncertain_flow);
@@ -97,7 +99,7 @@ pub fn analyze_nushell_command(
 
     let mut most_restrictive: Option<PermissionResult> = None;
     for cmd in &analysis.commands {
-        let result = check_single_command(cmd, config, ctx, cwd, cwd, false, None, None, false);
+        let result = check_single_command(cmd, config, ctx, cwd, cwd, false, None, None, false, 0);
         most_restrictive = Some(merge_restrictive(most_restrictive, result));
     }
 
@@ -184,11 +186,14 @@ fn check_single_command(
     piped_query: Option<&str>,
     full_command: Option<&str>,
     is_remote: bool,
+    depth: u32,
 ) -> PermissionResult {
     if let Some(result) = check_docker_compose(cmd, is_remote) {
         return result;
     }
-    if let Some(result) = check_wrapper(cmd, config, ctx, virtual_cwd, piped_query, is_remote) {
+    if let Some(result) =
+        check_wrapper(cmd, config, ctx, virtual_cwd, piped_query, is_remote, depth)
+    {
         return result;
     }
     if let Some(result) = check_inplace_edit(cmd) {
@@ -233,11 +238,18 @@ fn check_wrapper(
     virtual_cwd: Option<&str>,
     piped_query: Option<&str>,
     is_remote: bool,
+    depth: u32,
 ) -> Option<PermissionResult> {
-    let unwrap_result = wrappers::unwrap_command(cmd, config)?;
+    let unwrap_result = wrappers::unwrap_command(cmd, config, depth)?;
 
     if let Some(ref inner) = unwrap_result.inner_command {
         let inner_is_remote = is_remote || unwrap_result.host.is_some();
+        // Increment depth when re-analyzing sourced file contents to prevent recursion
+        let inner_depth = if matches!(unwrap_result.wrapper.as_str(), "source" | ".") {
+            depth + 1
+        } else {
+            depth
+        };
         let inner_result = if unwrap_result.wrapper == "nu" {
             analyze_nushell_command(inner, config, ctx, virtual_cwd)
         } else {
@@ -248,6 +260,7 @@ fn check_wrapper(
                 virtual_cwd,
                 piped_query,
                 inner_is_remote,
+                inner_depth,
             )
         };
 
