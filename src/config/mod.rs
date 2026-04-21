@@ -143,6 +143,11 @@ pub struct Rule {
     #[serde(default)]
     pub host_rules: Vec<HostRule>,
 
+    /// When true and a host matches only the `*` wildcard, query an LLM to
+    /// decide if the host is safe, auto-allowing if it says SAFE.
+    #[serde(default)]
+    pub llm_fallback: bool,
+
     /// Required working directory (glob pattern, e.g., "/home/user/Projects/linux")
     #[serde(default)]
     pub cwd: Option<String>,
@@ -246,21 +251,14 @@ fn replace_command_name(s: &str, from: &str, to: &str) -> String {
         let at_command_pos = if i == 0 {
             true
         } else {
-            // Look at what precedes position i (skipping whitespace)
-            let mut j = i;
-            // skip leading whitespace before current position
-            // Actually check what non-whitespace char precedes the whitespace run before i
             let pre = &bytes[..i];
-            // find last non-whitespace byte
             let last_nonws = pre.iter().rposition(|&b| !b.is_ascii_whitespace());
             match last_nonws {
-                None => true, // only whitespace before i
+                None => true,
                 Some(k) => {
                     let b = pre[k];
-                    // After |, &, ;, (, or end of $( sequence
                     if b == b'|' || b == b';' || b == b'(' || b == b'&' {
-                        // skip whitespace between that char and i
-                        j = k + 1;
+                        let mut j = k + 1;
                         while j < i && bytes[j].is_ascii_whitespace() {
                             j += 1;
                         }

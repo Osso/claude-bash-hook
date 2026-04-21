@@ -2,6 +2,7 @@
 
 use crate::analyzer::Command;
 use crate::config::{Config, ExecContext, Permission, PermissionResult};
+use crate::host_advice;
 
 /// Extract host from a URL
 fn extract_host(url: &str) -> Option<String> {
@@ -162,13 +163,47 @@ pub fn check_curl(cmd: &Command, config: &Config, ctx: ExecContext) -> Option<Pe
     // Check each host against config rules
     // Return the most restrictive result (or first non-passthrough)
     for host in &hosts {
-        let result = config.check_command_with_host("curl", &cmd.args, Some(host), ctx);
-        if result.permission != Permission::Passthrough {
-            return Some(result);
+        let (result, wildcard_matched) =
+            config.check_command_with_host_flagged("curl", &cmd.args, Some(host), ctx);
+        if result.permission == Permission::Passthrough {
+            continue;
         }
+        return Some(apply_llm_fallback(result, wildcard_matched, host, config));
     }
 
     None
+}
+
+/// If the result is `Ask` from a wildcard match and `llm_fallback` is enabled
+/// on the matching curl rule, query the LLM. Auto-allow on `Safe`; keep `Ask`
+/// on `Unsafe`, `None` (error), or when LLM fallback is not configured.
+fn apply_llm_fallback(
+    result: PermissionResult,
+    wildcard_matched: bool,
+    host: &str,
+    config: &Config,
+) -> PermissionResult {
+    if result.permission != Permission::Ask || !wildcard_matched {
+        return result;
+    }
+
+    let llm_enabled = config
+        .rules
+        .iter()
+        .any(|r| r.llm_fallback && r.permission == "check_host");
+
+    if !llm_enabled {
+        return result;
+    }
+
+    match host_advice::query_host_safety(host) {
+        Some(host_advice::HostDecision::Safe) => PermissionResult {
+            permission: Permission::Allow,
+            reason: format!("LLM allowed {}", host),
+            suggestion: None,
+        },
+        _ => result,
+    }
 }
 
 #[cfg(test)]
@@ -333,5 +368,89 @@ mod tests {
         ]);
         let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    fn config_with_llm_fallback() -> Config {
+        let config_str = r#"
+            default = "passthrough"
+            [[rules]]
+            commands = ["curl"]
+            permission = "check_host"
+            llm_fallback = true
+            reason = "curl"
+            host_rules = [
+                { pattern = "localhost", permission = "allow" },
+                { pattern = "*", permission = "ask" },
+            ]
+        "#;
+        toml::from_str(config_str).unwrap()
+    }
+
+    /// Pre-populate the host-decisions cache for testing.
+    fn seed_cache(dir: &tempfile::TempDir, host: &str, decision: &str) {
+        let cache_dir = dir.path().join(".cache/claude-bash-hook");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache_file = cache_dir.join("host-decisions.json");
+        let content = format!(r#"{{"{host}": "{decision}"}}"#);
+        std::fs::write(cache_file, content).unwrap();
+    }
+
+    #[test]
+    fn test_llm_fallback_cached_safe_host_allows() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_cache(&dir, "openai.com", "safe");
+        // SAFETY: single-threaded test
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let config = config_with_llm_fallback();
+        let cmd = make_cmd(&["https://openai.com/v1/chat"]);
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
+
+        assert_eq!(result.permission, Permission::Allow);
+        assert!(result.reason.contains("openai.com"), "{}", result.reason);
+    }
+
+    #[test]
+    fn test_llm_fallback_cached_unsafe_host_asks() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_cache(&dir, "evil-lookalike.com", "unsafe");
+        // SAFETY: single-threaded test
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let config = config_with_llm_fallback();
+        let cmd = make_cmd(&["https://evil-lookalike.com/steal"]);
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
+
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_llm_fallback_not_triggered_for_specific_rule_match() {
+        // If a host matches a named (non-wildcard) rule, LLM fallback must not run.
+        let dir = tempfile::tempdir().unwrap();
+        // Do NOT seed cache — if LLM were called it would fail (no codex binary)
+        // and we want to verify the named-rule result stands on its own.
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let config = config_with_llm_fallback();
+        let cmd = make_cmd(&["http://localhost/ping"]);
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
+
+        // localhost matches the specific "allow" rule, not the wildcard
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_llm_fallback_disabled_when_flag_off() {
+        // With llm_fallback = false (default), unknown hosts always ask.
+        let dir = tempfile::tempdir().unwrap();
+        seed_cache(&dir, "openai.com", "safe"); // cache says safe but flag is off
+        unsafe { std::env::set_var("HOME", dir.path()) };
+
+        let config = config_with_curl_rules(); // has llm_fallback = false (default)
+        let cmd = make_cmd(&["https://openai.com/v1/chat"]);
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
+
+        assert_eq!(result.permission, Permission::Ask);
     }
 }

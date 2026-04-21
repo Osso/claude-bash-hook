@@ -10,6 +10,7 @@ mod config;
 mod curl;
 mod docker;
 mod git;
+mod host_advice;
 mod kill;
 mod nushell;
 mod output;
