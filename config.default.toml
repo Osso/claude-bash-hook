@@ -20,6 +20,14 @@ default = "passthrough"
 # Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
 # main_thread_write_allow = ["~/.claude/rules/99-calibration.md"]
 
+# File paths that always prompt instead of auto-allowing — applies to
+# Write/Edit/Read tools and to rm commands. Same glob syntax as above.
+# ask_paths = ["~/.config/*"]
+
+# File paths to auto-allow for the Read tool (overrides Claude Code's default
+# prompt). `ask_paths` still wins on overlap. Same glob syntax as above.
+# read_allow_paths = ["~/Repos/*", "~/Projects/*"]
+
 # Enable AI-powered advice for permission decisions (uses claude-safe CLI)
 enable_advice = false
 

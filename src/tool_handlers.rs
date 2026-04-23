@@ -6,12 +6,15 @@ use crate::{
     permission_name,
 };
 
-/// Handle Write, Edit, and regex-replace tools.
+/// Handle Write, Edit, Read, and regex-replace tools.
 /// Returns true if the tool was handled (caller should return), false otherwise.
 pub fn handle_non_bash_tool(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
     if hook_input.tool_name == "Write" || hook_input.tool_name == "Edit" {
         handle_write_edit(hook_input, config, is_subagent);
         return true;
+    }
+    if hook_input.tool_name == "Read" {
+        return handle_read(hook_input, config);
     }
     if hook_input.tool_name == "mcp__regex-replace__regex_replace" {
         handle_regex_replace(hook_input, is_subagent);
@@ -29,6 +32,14 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
             output_decision(&result.0, &result.1, None);
             return;
         }
+        if config.is_ask_path(path) {
+            output_decision(
+                "ask",
+                &format!("{} to protected path {}", hook_input.tool_name, path),
+                None,
+            );
+            return;
+        }
     }
     let result = apply_access_mode_result(
         PermissionResult {
@@ -44,6 +55,23 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
         }
         Permission::Passthrough => {}
     }
+}
+
+/// Handle Read tool. Emits a decision when the path is on the ask-list or
+/// auto-allow list; otherwise returns true without output so Claude Code's
+/// default applies. `ask_paths` wins on overlap.
+fn handle_read(hook_input: &HookInput, config: &Config) -> bool {
+    let Some(ref path) = hook_input.tool_input.file_path else {
+        return true;
+    };
+    if config.is_ask_path(path) {
+        output_decision("ask", &format!("Read from protected path {}", path), None);
+        return true;
+    }
+    if config.is_read_allowed(path) {
+        output_decision("allow", &format!("Read from allowed path {}", path), None);
+    }
+    true
 }
 
 fn check_main_thread_block(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
@@ -216,5 +244,47 @@ mod tests {
     fn test_handle_regex_replace_ask_path() {
         let input = hook_input("mcp__regex-replace__regex_replace");
         assert!(handle_non_bash_tool(&input, &Config::default(), false));
+    }
+
+    fn ask_paths_config(pattern: &str) -> Config {
+        toml::from_str(&format!(r#"ask_paths = ["{}"]"#, pattern)).expect("config")
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_handles_read() {
+        let mut input = hook_input("Read");
+        input.tool_input.file_path = Some("/home/user/.config/kitty.conf".to_string());
+        let config = ask_paths_config("/home/user/.config/*");
+        assert!(handle_non_bash_tool(&input, &config, false));
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_read_no_match_still_handled() {
+        let mut input = hook_input("Read");
+        input.tool_input.file_path = Some("/tmp/file.txt".to_string());
+        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_read_allow_paths_match() {
+        let mut input = hook_input("Read");
+        input.tool_input.file_path = Some("/home/user/Repos/foo.rs".to_string());
+        let config: Config =
+            toml::from_str(r#"read_allow_paths = ["/home/user/Repos/*"]"#).expect("config");
+        assert!(handle_non_bash_tool(&input, &config, false));
+    }
+
+    #[test]
+    fn test_ask_paths_beats_read_allow_paths() {
+        let mut input = hook_input("Read");
+        input.tool_input.file_path = Some("/home/user/.config/secret".to_string());
+        let config: Config = toml::from_str(
+            r#"
+            ask_paths = ["/home/user/.config/*"]
+            read_allow_paths = ["/home/user/*"]
+        "#,
+        )
+        .expect("config");
+        assert!(handle_non_bash_tool(&input, &config, false));
     }
 }

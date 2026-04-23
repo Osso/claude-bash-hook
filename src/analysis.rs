@@ -212,7 +212,8 @@ fn check_single_command(
     if let Some(result) = check_git_special(cmd, config, initial_cwd) {
         return result;
     }
-    if let Some(result) = check_filesystem(cmd, virtual_cwd, initial_cwd, has_uncertain_flow) {
+    if let Some(result) = check_filesystem(cmd, config, virtual_cwd, initial_cwd, has_uncertain_flow)
+    {
         return result;
     }
     if let Some(result) = check_misc(cmd, config, ctx, virtual_cwd, initial_cwd) {
@@ -470,6 +471,7 @@ fn check_git_special(
 
 fn check_filesystem(
     cmd: &analyzer::Command,
+    config: &Config,
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     has_uncertain_flow: bool,
@@ -478,7 +480,7 @@ fn check_filesystem(
         return docker::check_docker_run(cmd);
     }
     if cmd.name == "rm" {
-        return rm::check_rm(cmd, virtual_cwd, initial_cwd);
+        return rm::check_rm(cmd, config, virtual_cwd, initial_cwd);
     }
     if cmd.name == "kill" {
         return kill::check_kill(cmd);

@@ -98,6 +98,16 @@ pub struct Config {
     #[serde(default)]
     pub main_thread_write_allow: Vec<String>,
 
+    /// Paths that should always force an explicit prompt for Write/Edit/Read/rm.
+    /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
+    #[serde(default)]
+    pub ask_paths: Vec<String>,
+
+    /// Paths auto-allowed for Read. `ask_paths` wins on overlap.
+    /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
+    #[serde(default)]
+    pub read_allow_paths: Vec<String>,
+
     /// Rewrite configuration for prepending a binary (e.g., rtk) to allowed commands
     #[serde(default)]
     pub rewrite: Option<RewriteConfig>,
@@ -409,29 +419,40 @@ impl Config {
 
     /// Check if a file path is allowed for main thread writes
     pub fn is_main_thread_write_allowed(&self, path: &str) -> bool {
-        let home = std::env::var("HOME").unwrap_or_default();
-        for pattern in &self.main_thread_write_allow {
-            let expanded = if pattern.starts_with("~/") {
-                format!("{}{}", home, &pattern[1..])
-            } else {
-                pattern.clone()
-            };
-            // Exact match
-            if path == expanded {
-                return true;
-            }
-            // Simple glob: "dir/*" matches any direct child of dir
-            if let Some(prefix) = expanded.strip_suffix("/*") {
-                if path.starts_with(prefix)
-                    && path.len() > prefix.len()
-                    && path.as_bytes()[prefix.len()] == b'/'
-                {
-                    return true;
-                }
-            }
-        }
-        false
+        path_matches_any(path, &self.main_thread_write_allow)
     }
+
+    /// Check if a file path is on the ask-list (force prompt for writes/reads/rm).
+    pub fn is_ask_path(&self, path: &str) -> bool {
+        path_matches_any(path, &self.ask_paths)
+    }
+
+    /// Check if a file path is auto-allowed for Read.
+    pub fn is_read_allowed(&self, path: &str) -> bool {
+        path_matches_any(path, &self.read_allow_paths)
+    }
+}
+
+fn path_matches_any(path: &str, patterns: &[String]) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    for pattern in patterns {
+        let expanded = if pattern.starts_with("~/") {
+            format!("{}{}", home, &pattern[1..])
+        } else {
+            pattern.clone()
+        };
+        if path == expanded {
+            return true;
+        }
+        if let Some(prefix) = expanded.strip_suffix("/*")
+            && path.starts_with(prefix)
+            && path.len() > prefix.len()
+            && path.as_bytes()[prefix.len()] == b'/'
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn canonicalize_for_match(path: &str) -> Option<String> {
