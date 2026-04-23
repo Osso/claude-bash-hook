@@ -329,29 +329,65 @@ fn analyze_and_resolve(
     resolve_passthrough(result, is_nushell)
 }
 
+fn session_has_subagents(session_id: Option<&str>) -> bool {
+    session_id.is_some_and(subagent_tracker::has_active_subagents)
+}
+
+fn is_nushell_tool(tool_name: &str) -> bool {
+    tool_name == "mcp__nushell__execute"
+}
+
+fn is_shell_tool(tool_name: &str) -> bool {
+    tool_name == "Bash" || is_nushell_tool(tool_name)
+}
+
+fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewritten: bool) {
+    info!(
+        "decision=passthrough session={:?} command={:?}",
+        hook_input.session_id, command
+    );
+    // If alias was applied, emit allow with updatedInput so Claude sees the rewritten command
+    if alias_rewritten {
+        output_decision(
+            "allow",
+            "alias rewrite",
+            Some(serde_json::json!({ "command": command })),
+        );
+    }
+}
+
+fn emit_analyzed_decision(
+    hook_input: &HookInput,
+    command: &str,
+    config: &Config,
+    alias_rewritten: Option<&str>,
+    result: &PermissionResult,
+) {
+    info!(
+        "decision={} session={:?} command={:?} reason={:?}",
+        permission_name(result.permission),
+        hook_input.session_id,
+        command,
+        result.reason
+    );
+    emit_decision(command, result, config, alias_rewritten);
+}
+
 fn main() {
     init_logging();
     let hook_input = read_hook_input();
-
     if handle_subagent_event(&hook_input) {
         return;
     }
-
-    let is_subagent = hook_input
-        .session_id
-        .as_deref()
-        .is_some_and(|sid| subagent_tracker::has_active_subagents(sid));
+    let is_subagent = session_has_subagents(hook_input.session_id.as_deref());
     let config = Config::load_or_default();
-
     if tool_handlers::handle_non_bash_tool(&hook_input, &config, is_subagent) {
         return;
     }
-
-    let is_nushell = hook_input.tool_name == "mcp__nushell__execute";
-    if hook_input.tool_name != "Bash" && !is_nushell {
+    if !is_shell_tool(&hook_input.tool_name) {
         return;
     }
-
+    let is_nushell = is_nushell_tool(&hook_input.tool_name);
     let Some(ref original_command) = hook_input.tool_input.command else {
         return;
     };
@@ -361,29 +397,17 @@ fn main() {
     let command = alias_rewritten.as_deref().unwrap_or(original_command);
 
     let Some(result) = analyze_and_resolve(&hook_input, &config, command, is_nushell) else {
-        info!(
-            "decision=passthrough session={:?} command={:?}",
-            hook_input.session_id, command
-        );
-        // If alias was applied, emit allow with updatedInput so Claude sees the rewritten command
-        if alias_rewritten.is_some() {
-            output_decision(
-                "allow",
-                "alias rewrite",
-                Some(serde_json::json!({ "command": command })),
-            );
-        }
+        handle_passthrough_decision(&hook_input, command, alias_rewritten.is_some());
         return;
     };
 
-    info!(
-        "decision={} session={:?} command={:?} reason={:?}",
-        permission_name(result.permission),
-        hook_input.session_id,
+    emit_analyzed_decision(
+        &hook_input,
         command,
-        result.reason
+        &config,
+        alias_rewritten.as_deref(),
+        &result,
     );
-    emit_decision(command, &result, &config, alias_rewritten.as_deref());
 }
 
 #[cfg(test)]

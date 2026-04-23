@@ -557,6 +557,55 @@ impl Config {
         )
     }
 
+    fn unknown_host_result(
+        &self,
+        rule: &super::Rule,
+        suggestion: Option<String>,
+    ) -> PermissionResult {
+        PermissionResult {
+            permission: Permission::Ask,
+            reason: format!("{} (unknown host)", rule.reason),
+            suggestion,
+        }
+    }
+
+    fn first_host_matching_rule<'a>(
+        &'a self,
+        name: &str,
+        args: &[String],
+    ) -> Option<&'a super::Rule> {
+        self.rules.iter().find(|rule| {
+            rule.commands
+                .iter()
+                .any(|pattern| self.rule_matches_host_pattern(rule, pattern, name, args))
+        })
+    }
+
+    fn evaluate_host_rule_flagged(
+        &self,
+        rule: &super::Rule,
+        host: Option<&str>,
+        ctx: ExecContext,
+        suggestion: Option<String>,
+    ) -> (PermissionResult, bool) {
+        let main_thread_overriding = self.rule_main_thread_override(rule, ctx);
+        let effective_perm = self.effective_rule_permission(rule, ctx);
+
+        if main_thread_overriding {
+            return (self.main_thread_override_result(effective_perm), false);
+        }
+        if effective_perm != "check_host" {
+            return (
+                self.rule_match_result(rule, effective_perm, suggestion, false),
+                false,
+            );
+        }
+        let Some(host) = host else {
+            return (self.unknown_host_result(rule, suggestion), false);
+        };
+        self.host_checked_result_flagged(rule, host, suggestion)
+    }
+
     /// Like `check_command_with_host` but also returns whether the matched host
     /// rule was the `*` wildcard (so callers like `curl` can trigger LLM fallback).
     pub fn check_command_with_host_flagged(
@@ -567,37 +616,8 @@ impl Config {
         ctx: ExecContext,
     ) -> (PermissionResult, bool) {
         let suggestion = self.find_suggestion(name, args);
-
-        for rule in &self.rules {
-            for pattern in &rule.commands {
-                if !self.rule_matches_host_pattern(rule, pattern, name, args) {
-                    continue;
-                }
-
-                let main_thread_overriding = self.rule_main_thread_override(rule, ctx);
-                let effective_perm = self.effective_rule_permission(rule, ctx);
-
-                if main_thread_overriding {
-                    return (self.main_thread_override_result(effective_perm), false);
-                }
-                if effective_perm == "check_host" {
-                    let Some(h) = host else {
-                        return (
-                            PermissionResult {
-                                permission: Permission::Ask,
-                                reason: format!("{} (unknown host)", rule.reason),
-                                suggestion,
-                            },
-                            false,
-                        );
-                    };
-                    return self.host_checked_result_flagged(rule, h, suggestion);
-                }
-                return (
-                    self.rule_match_result(rule, effective_perm, suggestion, false),
-                    false,
-                );
-            }
+        if let Some(rule) = self.first_host_matching_rule(name, args) {
+            return self.evaluate_host_rule_flagged(rule, host, ctx, suggestion);
         }
 
         let (default_perm, reason, suggestion) = self.resolve_default(ctx, suggestion);

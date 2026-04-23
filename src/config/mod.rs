@@ -10,6 +10,8 @@ mod matching;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_aliases;
+#[cfg(test)]
 mod tests_overrides;
 
 /// Permission levels (ordered by restrictiveness)
@@ -247,44 +249,46 @@ fn replace_command_name(s: &str, from: &str, to: &str) -> String {
     let mut i = 0;
 
     while i < bytes.len() {
-        // Check if position i is a command-name start
-        let at_command_pos = if i == 0 {
-            true
-        } else {
-            let pre = &bytes[..i];
-            let last_nonws = pre.iter().rposition(|&b| !b.is_ascii_whitespace());
-            match last_nonws {
-                None => true,
-                Some(k) => {
-                    let b = pre[k];
-                    if b == b'|' || b == b';' || b == b'(' || b == b'&' {
-                        let mut j = k + 1;
-                        while j < i && bytes[j].is_ascii_whitespace() {
-                            j += 1;
-                        }
-                        j == i
-                    } else {
-                        false
-                    }
-                }
-            }
-        };
-
-        if at_command_pos
-            && bytes[i..].starts_with(from_bytes)
-            && bytes.get(i + from_len).map_or(true, |&b| {
-                b.is_ascii_whitespace() || matches!(b, b';' | b'|' | b'&' | b')' | b'>')
-            })
-        {
+        if is_alias_match_at(bytes, i, from_bytes, from_len) {
             result.push_str(to);
             i += from_len;
-        } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            continue;
         }
+
+        result.push(bytes[i] as char);
+        i += 1;
     }
 
     result
+}
+
+fn is_alias_match_at(bytes: &[u8], index: usize, from_bytes: &[u8], from_len: usize) -> bool {
+    is_command_position(bytes, index)
+        && bytes[index..].starts_with(from_bytes)
+        && has_command_boundary_after(bytes, index, from_len)
+}
+
+fn is_command_position(bytes: &[u8], index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    let pre = &bytes[..index];
+    let Some(last_nonws) = pre.iter().rposition(|&b| !b.is_ascii_whitespace()) else {
+        return true;
+    };
+    let separator = pre[last_nonws];
+    if !matches!(separator, b'|' | b';' | b'(' | b'&') {
+        return false;
+    }
+    bytes[last_nonws + 1..index]
+        .iter()
+        .all(|b| b.is_ascii_whitespace())
+}
+
+fn has_command_boundary_after(bytes: &[u8], index: usize, from_len: usize) -> bool {
+    bytes.get(index + from_len).map_or(true, |&b| {
+        b.is_ascii_whitespace() || matches!(b, b';' | b'|' | b'&' | b')' | b'>')
+    })
 }
 
 impl Config {
