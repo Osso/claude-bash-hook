@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn query_returns_none_when_codex_missing() {
         // Override PATH so `which("codex")` fails, making CodexCli::new() → Err.
-        // SAFETY: single-threaded test binary; no concurrent env reads.
+        let _guard = crate::test_support::env_lock();
         let original_path = std::env::var("PATH").unwrap_or_default();
         unsafe { std::env::set_var("PATH", "/nonexistent-path-for-test") };
 

@@ -397,9 +397,9 @@ mod tests {
 
     #[test]
     fn test_llm_fallback_cached_safe_host_allows() {
+        let _guard = crate::test_support::env_lock();
         let dir = tempfile::tempdir().unwrap();
         seed_cache(&dir, "openai.com", "safe");
-        // SAFETY: single-threaded test
         unsafe { std::env::set_var("HOME", dir.path()) };
 
         let config = config_with_llm_fallback();
@@ -412,9 +412,9 @@ mod tests {
 
     #[test]
     fn test_llm_fallback_cached_unsafe_host_asks() {
+        let _guard = crate::test_support::env_lock();
         let dir = tempfile::tempdir().unwrap();
         seed_cache(&dir, "evil-lookalike.com", "unsafe");
-        // SAFETY: single-threaded test
         unsafe { std::env::set_var("HOME", dir.path()) };
 
         let config = config_with_llm_fallback();
@@ -427,6 +427,7 @@ mod tests {
     #[test]
     fn test_llm_fallback_not_triggered_for_specific_rule_match() {
         // If a host matches a named (non-wildcard) rule, LLM fallback must not run.
+        let _guard = crate::test_support::env_lock();
         let dir = tempfile::tempdir().unwrap();
         // Do NOT seed cache — if LLM were called it would fail (no codex binary)
         // and we want to verify the named-rule result stands on its own.
@@ -443,6 +444,7 @@ mod tests {
     #[test]
     fn test_llm_fallback_disabled_when_flag_off() {
         // With llm_fallback = false (default), unknown hosts always ask.
+        let _guard = crate::test_support::env_lock();
         let dir = tempfile::tempdir().unwrap();
         seed_cache(&dir, "openai.com", "safe"); // cache says safe but flag is off
         unsafe { std::env::set_var("HOME", dir.path()) };
