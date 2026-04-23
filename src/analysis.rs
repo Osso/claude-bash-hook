@@ -241,53 +241,107 @@ fn check_wrapper(
     depth: u32,
 ) -> Option<PermissionResult> {
     let unwrap_result = wrappers::unwrap_command(cmd, config, depth)?;
+    let host = unwrap_result.host.as_deref();
 
-    if let Some(ref inner) = unwrap_result.inner_command {
-        let inner_is_remote = is_remote || unwrap_result.host.is_some();
-        // Increment depth when re-analyzing sourced file contents to prevent recursion
-        let inner_depth = if matches!(unwrap_result.wrapper.as_str(), "source" | ".") {
-            depth + 1
-        } else {
-            depth
-        };
-        let inner_result = if unwrap_result.wrapper == "nu" {
-            analyze_nushell_command(inner, config, ctx, virtual_cwd)
-        } else {
-            analyze_with_piped_query(
-                inner,
-                config,
-                ctx,
-                virtual_cwd,
-                piped_query,
-                inner_is_remote,
-                inner_depth,
-            )
-        };
-
-        if unwrap_result.host.is_some() {
-            let host_result = config.check_command_with_host(
-                &cmd.name,
-                &cmd.args,
-                unwrap_result.host.as_deref(),
-                ctx,
-            );
-            if host_result.permission > inner_result.permission {
-                return Some(host_result);
-            }
-        }
-        return Some(inner_result);
-    }
-
-    if unwrap_result.host.is_some() {
-        return Some(config.check_command_with_host(
-            &cmd.name,
-            &cmd.args,
-            unwrap_result.host.as_deref(),
+    if let Some(inner) = unwrap_result.inner_command.as_deref() {
+        return Some(check_wrapper_inner_command(
+            cmd,
+            config,
             ctx,
+            virtual_cwd,
+            piped_query,
+            is_remote,
+            depth,
+            inner,
+            &unwrap_result.wrapper,
+            host,
         ));
     }
 
-    None
+    host.map(|_| wrapper_host_result(cmd, config, host, ctx))
+}
+
+fn check_wrapper_inner_command(
+    cmd: &analyzer::Command,
+    config: &Config,
+    ctx: ExecContext,
+    virtual_cwd: Option<&str>,
+    piped_query: Option<&str>,
+    is_remote: bool,
+    depth: u32,
+    inner: &str,
+    wrapper: &str,
+    host: Option<&str>,
+) -> PermissionResult {
+    let inner_result = analyze_wrapper_inner(
+        inner,
+        wrapper,
+        config,
+        ctx,
+        virtual_cwd,
+        piped_query,
+        is_remote,
+        host.is_some(),
+        depth,
+    );
+    let Some(_) = host else {
+        return inner_result;
+    };
+    let host_result = wrapper_host_result(cmd, config, host, ctx);
+    more_restrictive_result(inner_result, host_result)
+}
+
+fn analyze_wrapper_inner(
+    inner: &str,
+    wrapper: &str,
+    config: &Config,
+    ctx: ExecContext,
+    virtual_cwd: Option<&str>,
+    piped_query: Option<&str>,
+    is_remote: bool,
+    has_host: bool,
+    depth: u32,
+) -> PermissionResult {
+    if wrapper == "nu" {
+        return analyze_nushell_command(inner, config, ctx, virtual_cwd);
+    }
+    analyze_with_piped_query(
+        inner,
+        config,
+        ctx,
+        virtual_cwd,
+        piped_query,
+        is_remote || has_host,
+        wrapper_depth(wrapper, depth),
+    )
+}
+
+fn wrapper_depth(wrapper: &str, depth: u32) -> u32 {
+    if matches!(wrapper, "source" | ".") {
+        // Increment depth when re-analyzing sourced file contents to prevent recursion
+        return depth + 1;
+    }
+    depth
+}
+
+fn wrapper_host_result(
+    cmd: &analyzer::Command,
+    config: &Config,
+    host: Option<&str>,
+    ctx: ExecContext,
+) -> PermissionResult {
+    config.check_command_with_host(&cmd.name, &cmd.args, host, ctx)
+}
+
+fn more_restrictive_result(
+    inner_result: PermissionResult,
+    host_result: PermissionResult,
+) -> PermissionResult {
+    if host_result.permission > inner_result.permission {
+        host_result
+    } else {
+        inner_result
+    }
 }
 
 fn check_inplace_edit(cmd: &analyzer::Command) -> Option<PermissionResult> {
