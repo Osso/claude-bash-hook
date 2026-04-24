@@ -18,6 +18,10 @@ systemd-journal-logger = "2"
 regex = "1.12.2"
 llm-sdk = { path = "/home/osso/Projects/lib/llm-sdk" }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
+rmcp = { version = "0.9", features = ["server", "transport-io", "elicitation"] }
+schemars = "1"
+anyhow = "1"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
