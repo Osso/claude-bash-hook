@@ -40,6 +40,14 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
             );
             return;
         }
+        if config.is_write_allowed(path) {
+            output_decision(
+                "allow",
+                &format!("{} to allowed path {}", hook_input.tool_name, path),
+                None,
+            );
+            return;
+        }
     }
     let result = apply_access_mode_result(
         PermissionResult {
@@ -282,6 +290,29 @@ mod tests {
             r#"
             ask_paths = ["/home/user/.config/*"]
             read_allow_paths = ["/home/user/*"]
+        "#,
+        )
+        .expect("config");
+        assert!(handle_non_bash_tool(&input, &config, false));
+    }
+
+    #[test]
+    fn test_write_allow_paths_match() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/tmp/mcp_probe.py".to_string());
+        let config: Config =
+            toml::from_str(r#"write_allow_paths = ["/tmp/*"]"#).expect("config");
+        assert!(handle_non_bash_tool(&input, &config, false));
+    }
+
+    #[test]
+    fn test_ask_paths_beats_write_allow_paths() {
+        let mut input = hook_input("Write");
+        input.tool_input.file_path = Some("/home/user/.config/secret".to_string());
+        let config: Config = toml::from_str(
+            r#"
+            ask_paths = ["/home/user/.config/*"]
+            write_allow_paths = ["/home/user/*"]
         "#,
         )
         .expect("config");

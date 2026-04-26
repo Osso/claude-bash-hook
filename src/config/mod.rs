@@ -108,6 +108,11 @@ pub struct Config {
     #[serde(default)]
     pub read_allow_paths: Vec<String>,
 
+    /// Paths auto-allowed for Write/Edit. `ask_paths` wins on overlap.
+    /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
+    #[serde(default)]
+    pub write_allow_paths: Vec<String>,
+
     /// Rewrite configuration for prepending a binary (e.g., rtk) to allowed commands
     #[serde(default)]
     pub rewrite: Option<RewriteConfig>,
@@ -430,6 +435,11 @@ impl Config {
     /// Check if a file path is auto-allowed for Read.
     pub fn is_read_allowed(&self, path: &str) -> bool {
         path_matches_any(path, &self.read_allow_paths)
+    }
+
+    /// Check if a file path is auto-allowed for Write/Edit.
+    pub fn is_write_allowed(&self, path: &str) -> bool {
+        path_matches_any(path, &self.write_allow_paths)
     }
 }
 

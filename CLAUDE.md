@@ -144,7 +144,7 @@ Outputs JSON to stdout (or nothing for passthrough):
 ```
 
 Also handles:
-- `Write` / `Edit` tools - blocks `/tmp/*` unless under `/tmp/claude/*`; denies on main thread when `main_thread_default` is set
+- `Write` / `Edit` tools - auto-allows paths in `write_allow_paths` (e.g., `/tmp/*`); asks on `ask_paths` (wins over allow); denies on main thread when `main_thread_default` is set
 - `mcp__regex-replace__regex_replace` - Auto-allows in edit mode, subagent, or dry run; asks otherwise
 - `mcp__nushell__execute` - Nushell MCP tool (passthrough becomes ask)
 
