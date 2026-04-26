@@ -2,6 +2,7 @@
 name = "claude-bash-hook"
 version = "0.2.1"
 edition = "2024"
+autobins = false
 
 [dependencies]
 tree-sitter = "0.25"
@@ -30,3 +31,19 @@ tempfile = "3"
 lto = false
 incremental = true
 strip = true
+
+[[bin]]
+name = "claude-bash-hook"
+path = "src/main.rs"
+
+[[bin]]
+name = "claude-bash-hook-approval"
+path = "src/bin/approval_prompt.rs"
+
+[[bin]]
+name = "debug"
+path = "src/bin/debug.rs"
+
+[[bin]]
+name = "debug_env"
+path = "src/bin/debug_env.rs"
