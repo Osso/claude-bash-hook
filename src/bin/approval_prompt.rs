@@ -126,6 +126,28 @@ async fn ask_codex(tool_name: &str, target: Option<&str>) -> Option<Advice> {
     Some(parse_advice(&output.text))
 }
 
+/// Bypass codex when `CLAUDE_APPROVAL_MOCK` is set, so the MCP protocol path
+/// (including the UNSURE → `elicitation/create` round-trip) can be exercised
+/// without hitting an LLM. Recognized values are case-insensitive: `safe`,
+/// `unsafe`, `unsure`. Any other value is treated as unset.
+fn mock_advice_from_env() -> Option<Advice> {
+    let raw = std::env::var("CLAUDE_APPROVAL_MOCK").ok()?;
+    mock_advice_from_str(&raw)
+}
+
+fn mock_advice_from_str(raw: &str) -> Option<Advice> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "safe" => Some(Advice::Safe {
+            reason: "mocked SAFE via CLAUDE_APPROVAL_MOCK".to_string(),
+        }),
+        "unsafe" => Some(Advice::Unsafe {
+            reason: "mocked UNSAFE via CLAUDE_APPROVAL_MOCK".to_string(),
+        }),
+        "unsure" => Some(Advice::Unsure),
+        _ => None,
+    }
+}
+
 fn parse_advice(text: &str) -> Advice {
     let trimmed = text.trim();
     let upper = trimmed.to_uppercase();
@@ -546,12 +568,20 @@ impl ApprovalServer {
             params.tool_name, params.tool_use_id, target
         );
 
-        let advice = ask_codex(&params.tool_name, target.as_deref())
-            .await
-            .unwrap_or_else(|| {
-                warn!("codex unreachable; falling back to Unsure");
-                Advice::Unsure
-            });
+        let advice = if let Some(mocked) = mock_advice_from_env() {
+            info!(
+                "CLAUDE_APPROVAL_MOCK set; bypassing codex tool={} target={:?}",
+                params.tool_name, target
+            );
+            mocked
+        } else {
+            ask_codex(&params.tool_name, target.as_deref())
+                .await
+                .unwrap_or_else(|| {
+                    warn!("codex unreachable; falling back to Unsure");
+                    Advice::Unsure
+                })
+        };
 
         // Capture SAFE reason before `decide` consumes `advice`; used only
         // when CLAUDE_APPROVAL_PERSIST=1 so Codex SAFE writes a real
@@ -658,6 +688,49 @@ mod tests {
     #[test]
     fn parse_advice_unknown_is_unsure() {
         assert!(matches!(parse_advice("hmm"), Advice::Unsure));
+    }
+
+    #[test]
+    fn mock_advice_safe() {
+        assert!(matches!(
+            mock_advice_from_str("safe"),
+            Some(Advice::Safe { .. })
+        ));
+        assert!(matches!(
+            mock_advice_from_str("SAFE"),
+            Some(Advice::Safe { .. })
+        ));
+        assert!(matches!(
+            mock_advice_from_str("  Safe  "),
+            Some(Advice::Safe { .. })
+        ));
+    }
+
+    #[test]
+    fn mock_advice_unsafe() {
+        assert!(matches!(
+            mock_advice_from_str("unsafe"),
+            Some(Advice::Unsafe { .. })
+        ));
+        assert!(matches!(
+            mock_advice_from_str("UNSAFE"),
+            Some(Advice::Unsafe { .. })
+        ));
+    }
+
+    #[test]
+    fn mock_advice_unsure() {
+        assert!(matches!(
+            mock_advice_from_str("unsure"),
+            Some(Advice::Unsure)
+        ));
+    }
+
+    #[test]
+    fn mock_advice_unknown_is_none() {
+        assert!(mock_advice_from_str("").is_none());
+        assert!(mock_advice_from_str("foo").is_none());
+        assert!(mock_advice_from_str("yes").is_none());
     }
 
     #[test]
