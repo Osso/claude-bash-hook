@@ -40,6 +40,12 @@ struct ApprovalInput {
     #[serde(default)]
     #[schemars(description = "Opaque identifier Claude assigned to this tool invocation")]
     tool_use_id: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "CLI policy suggestions for this call")]
+    permission_suggestions: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    #[schemars(description = "Path that triggered a deny rule, if any")]
+    blocked_path: Option<String>,
 }
 
 /// A permission rule persisted on "always allow".
@@ -94,13 +100,42 @@ fn rule_target(tool_name: &str, input: &HashMap<String, serde_json::Value>) -> O
     }
 }
 
-fn build_prompt(tool_name: &str, target: Option<&str>) -> String {
+fn build_prompt(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+) -> String {
     let target_line = target
         .map(|t| format!("Target: {}", t))
         .unwrap_or_else(|| "Target: (no recognizable target field)".to_string());
+
+    let mut extras = String::new();
+
+    if let Some(path) = blocked_path {
+        extras.push_str(&format!("\nBlocked path: {path}"));
+    }
+
+    if let Some(sugs) = suggestions {
+        let non_empty: Vec<&serde_json::Value> = sugs.iter().collect();
+        if !non_empty.is_empty() {
+            extras.push_str("\nPolicy suggestions:");
+            for s in non_empty {
+                let line = serde_json::to_string(s).unwrap_or_default();
+                let line = if line.len() > 200 {
+                    let truncated: String = line.chars().take(199).collect();
+                    format!("{truncated}\u{2026}")
+                } else {
+                    line
+                };
+                extras.push_str(&format!("\n  {line}"));
+            }
+        }
+    }
+
     format!(
         "An AI coding agent wants to use tool `{tool_name}`.\n\
-         {target_line}\n\
+         {target_line}{extras}\n\
          \n\
          Decide whether this should be auto-allowed for the rest of the session.\n\
          Reply with EXACTLY one of, followed by a one-line reason:\n\
@@ -113,7 +148,12 @@ fn build_prompt(tool_name: &str, target: Option<&str>) -> String {
     )
 }
 
-async fn ask_codex(tool_name: &str, target: Option<&str>) -> Option<Advice> {
+async fn ask_codex(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+) -> Option<Advice> {
     use llm_sdk::Backend;
     use llm_sdk::codex_cli::CodexCli;
 
@@ -121,7 +161,7 @@ async fn ask_codex(tool_name: &str, target: Option<&str>) -> Option<Advice> {
         .ok()?
         .model(CODEX_MODEL)
         .timeout(CODEX_TIMEOUT);
-    let prompt = build_prompt(tool_name, target);
+    let prompt = build_prompt(tool_name, target, suggestions, blocked_path);
     let output = backend.complete(&prompt).await.ok()?;
     Some(parse_advice(&output.text))
 }
@@ -575,9 +615,14 @@ impl ApprovalServer {
             );
             mocked
         } else {
-            ask_codex(&params.tool_name, target.as_deref())
-                .await
-                .unwrap_or_else(|| {
+            ask_codex(
+                &params.tool_name,
+                target.as_deref(),
+                params.permission_suggestions.as_deref(),
+                params.blocked_path.as_deref(),
+            )
+            .await
+            .unwrap_or_else(|| {
                     warn!("codex unreachable; falling back to Unsure");
                     Advice::Unsure
                 })
@@ -757,6 +802,8 @@ mod tests {
             tool_name: "Bash".into(),
             input: input(&[("command", "ls")]),
             tool_use_id: None,
+            permission_suggestions: None,
+            blocked_path: None,
         };
         let d = ApprovalServer::decide(
             &params,
@@ -786,6 +833,8 @@ mod tests {
             tool_name: "Bash".into(),
             input: input(&[("command", "rm -rf /")]),
             tool_use_id: None,
+            permission_suggestions: None,
+            blocked_path: None,
         };
         let d = ApprovalServer::decide(
             &params,
@@ -967,6 +1016,8 @@ mod tests {
             tool_name: "Bash".into(),
             input: input(&[("command", "weird thing")]),
             tool_use_id: None,
+            permission_suggestions: None,
+            blocked_path: None,
         };
         let d = ApprovalServer::decide(&params, Advice::Unsure);
         match d {
@@ -976,5 +1027,58 @@ mod tests {
             } => assert!(updated_permissions.is_empty()),
             _ => panic!("expected Allow"),
         }
+    }
+
+    #[test]
+    fn build_prompt_omits_extras_when_absent() {
+        let with_extras = build_prompt("Bash", Some("ls -la"), None, None);
+        let legacy = {
+            let target_line = "Target: ls -la";
+            format!(
+                "An AI coding agent wants to use tool `Bash`.\n\
+                 {target_line}\n\
+                 \n\
+                 Decide whether this should be auto-allowed for the rest of the session.\n\
+                 Reply with EXACTLY one of, followed by a one-line reason:\n\
+                 \n\
+                 SAFE <reason>   — routine, read-only, or clearly harmless\n\
+                 UNSAFE <reason> — modifies important state, leaks secrets, or risky\n\
+                 UNSURE <reason> — ambiguous; let the human decide\n\
+                 \n\
+                 Err UNSURE for anything you're not confident about."
+            )
+        };
+        assert_eq!(with_extras, legacy);
+    }
+
+    #[test]
+    fn build_prompt_includes_blocked_path() {
+        let p = build_prompt("Bash", Some("cat /etc/passwd"), None, Some("/etc/passwd"));
+        assert!(p.contains("Blocked path: /etc/passwd"), "prompt: {p}");
+    }
+
+    #[test]
+    fn build_prompt_includes_suggestions() {
+        let sugs = vec![serde_json::json!({"behavior": "allow", "rule": "git status"})];
+        let p = build_prompt("Bash", Some("git status"), Some(&sugs), None);
+        assert!(p.contains("Policy suggestions:"), "prompt: {p}");
+        assert!(
+            p.contains(r#""behavior":"allow""#) || p.contains(r#""behavior": "allow""#),
+            "prompt: {p}"
+        );
+    }
+
+    #[test]
+    fn build_prompt_truncates_long_suggestion() {
+        let long_val = "x".repeat(300);
+        let sugs = vec![serde_json::json!({"key": long_val})];
+        let p = build_prompt("Bash", Some("cmd"), Some(&sugs), None);
+        let sug_line = p
+            .lines()
+            .find(|l| l.trim_start().starts_with('{'))
+            .expect("suggestion line present");
+        assert!(sug_line.ends_with('\u{2026}'), "line: {sug_line}");
+        // 2 spaces indent + up to 199 chars + 3-byte ellipsis = at most 204 bytes
+        assert!(sug_line.len() <= 205, "line len={}", sug_line.len());
     }
 }
