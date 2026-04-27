@@ -84,6 +84,14 @@ impl HookInput {
             .as_ref()
             .and_then(|event| event.access_mode.as_deref()))
     }
+
+    /// Codex sets `access_mode` (or nests it under `hook_event`) and rejects
+    /// Claude-only response keys (`permissionDecision: allow|ask`,
+    /// `updatedInput`). Detect the caller from that field so we can emit a
+    /// codex-shaped output instead.
+    pub(crate) fn is_codex(&self) -> bool {
+        self.access_mode().is_some()
+    }
 }
 
 /// Check if edits are allowed based on permission mode
@@ -163,6 +171,27 @@ struct HookSpecificOutput {
     updated_input: Option<serde_json::Value>,
 }
 
+/// Codex pre-tool-use schema only accepts `permissionDecision: deny` (with a
+/// non-empty reason) inside `hookSpecificOutput`. `allow`/`ask`/`updatedInput`
+/// trip the codex output validator and surface as
+/// "PreToolUse hook returned unsupported …" warnings, so for those we emit no
+/// stdout at all and let codex's own permission flow take over.
+#[derive(Debug, Serialize)]
+struct CodexHookOutput {
+    #[serde(rename = "hookSpecificOutput")]
+    hook_output: CodexHookSpecificOutput,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexHookSpecificOutput {
+    #[serde(rename = "hookEventName")]
+    event_name: &'static str,
+    #[serde(rename = "permissionDecision")]
+    decision: &'static str,
+    #[serde(rename = "permissionDecisionReason")]
+    reason: String,
+}
+
 /// Check if a Write tool path should be blocked
 pub(crate) fn check_write_path(path: &str) -> Option<(&'static str, String)> {
     let _ = path;
@@ -192,8 +221,47 @@ fn serialize_hook_output(
     serde_json::to_string(&build_hook_output(decision, reason, updated_input)).ok()
 }
 
-/// Output a hook decision, optionally with a rewritten command
-fn output_decision(decision: &str, reason: &str, updated_input: Option<serde_json::Value>) {
+/// Build the codex-shaped output for a deny decision. Returns None for
+/// allow/ask — codex falls through to its own permission flow on empty stdout,
+/// which is what we want.
+fn build_codex_hook_output(decision: &str, reason: &str) -> Option<CodexHookOutput> {
+    if decision != "deny" {
+        return None;
+    }
+    let trimmed = reason.trim();
+    let reason = if trimmed.is_empty() {
+        "claude-bash-hook denied without a reason".to_string()
+    } else {
+        reason.to_string()
+    };
+    Some(CodexHookOutput {
+        hook_output: CodexHookSpecificOutput {
+            event_name: "PreToolUse",
+            decision: "deny",
+            reason,
+        },
+    })
+}
+
+fn serialize_codex_hook_output(decision: &str, reason: &str) -> Option<String> {
+    serde_json::to_string(&build_codex_hook_output(decision, reason)?).ok()
+}
+
+/// Output a hook decision, optionally with a rewritten command. When the
+/// caller is codex, drop `updated_input` (codex schema rejects it) and switch
+/// to the deny-only codex shape.
+fn output_decision(
+    decision: &str,
+    reason: &str,
+    updated_input: Option<serde_json::Value>,
+    is_codex: bool,
+) {
+    if is_codex {
+        if let Some(json) = serialize_codex_hook_output(decision, reason) {
+            println!("{}", json);
+        }
+        return;
+    }
     if let Some(json) = serialize_hook_output(decision, reason, updated_input) {
         println!("{}", json);
     }
@@ -282,6 +350,7 @@ fn emit_decision(
     result: &PermissionResult,
     config: &Config,
     alias_command: Option<&str>,
+    is_codex: bool,
 ) {
     let reason = build_reason(command, result, config);
     let rewrite_input = rewrite::maybe_rewrite(command, result, config);
@@ -296,7 +365,7 @@ fn emit_decision(
         Permission::Deny => "deny",
         Permission::Passthrough => unreachable!(),
     };
-    output_decision(decision, &reason, updated_input);
+    output_decision(decision, &reason, updated_input, is_codex);
 }
 
 /// Analyze a bash/nushell command, apply access mode, resolve passthrough.
@@ -347,11 +416,13 @@ fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewr
         hook_input.session_id, command
     );
     // If alias was applied, emit allow with updatedInput so Claude sees the rewritten command
+    // (codex doesn't support updatedInput, so this is a silent no-op there).
     if alias_rewritten {
         output_decision(
             "allow",
             "alias rewrite",
             Some(serde_json::json!({ "command": command })),
+            hook_input.is_codex(),
         );
     }
 }
@@ -370,7 +441,7 @@ fn emit_analyzed_decision(
         command,
         result.reason
     );
-    emit_decision(command, result, config, alias_rewritten);
+    emit_decision(command, result, config, alias_rewritten, hook_input.is_codex());
 }
 
 fn main() {

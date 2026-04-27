@@ -27,9 +27,10 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
     if check_main_thread_block(hook_input, config, is_subagent) {
         return;
     }
+    let is_codex = hook_input.is_codex();
     if let Some(ref path) = hook_input.tool_input.file_path {
         if let Some(result) = check_write_path(path) {
-            output_decision(&result.0, &result.1, None);
+            output_decision(&result.0, &result.1, None, is_codex);
             return;
         }
         if config.is_ask_path(path) {
@@ -37,6 +38,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
                 "ask",
                 &format!("{} to protected path {}", hook_input.tool_name, path),
                 None,
+                is_codex,
             );
             return;
         }
@@ -45,6 +47,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
                 "allow",
                 &format!("{} to allowed path {}", hook_input.tool_name, path),
                 None,
+                is_codex,
             );
             return;
         }
@@ -59,7 +62,12 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
     );
     match result.permission {
         Permission::Allow | Permission::Ask | Permission::Deny => {
-            output_decision(permission_name(result.permission), &result.reason, None);
+            output_decision(
+                permission_name(result.permission),
+                &result.reason,
+                None,
+                is_codex,
+            );
         }
         Permission::Passthrough => {}
     }
@@ -72,12 +80,23 @@ fn handle_read(hook_input: &HookInput, config: &Config) -> bool {
     let Some(ref path) = hook_input.tool_input.file_path else {
         return true;
     };
+    let is_codex = hook_input.is_codex();
     if config.is_ask_path(path) {
-        output_decision("ask", &format!("Read from protected path {}", path), None);
+        output_decision(
+            "ask",
+            &format!("Read from protected path {}", path),
+            None,
+            is_codex,
+        );
         return true;
     }
     if config.is_read_allowed(path) {
-        output_decision("allow", &format!("Read from allowed path {}", path), None);
+        output_decision(
+            "allow",
+            &format!("Read from allowed path {}", path),
+            None,
+            is_codex,
+        );
     }
     true
 }
@@ -103,6 +122,7 @@ fn check_main_thread_block(hook_input: &HookInput, config: &Config, is_subagent:
         "deny",
         "main thread file writes disabled. Use Task() to delegate to subagents",
         None,
+        hook_input.is_codex(),
     );
     true
 }
@@ -124,7 +144,12 @@ fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool) {
         },
         hook_input.access_mode(),
     );
-    output_decision(permission_name(result.permission), &result.reason, None);
+    output_decision(
+        permission_name(result.permission),
+        &result.reason,
+        None,
+        hook_input.is_codex(),
+    );
 }
 
 fn regex_replace_reason(edit_mode: bool, is_dry_run: bool, is_subagent: bool) -> &'static str {

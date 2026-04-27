@@ -1,8 +1,9 @@
 use crate::config::{Config, Permission};
 use crate::{
     HookInput, analyze_and_resolve, apply_access_mode_permission, apply_access_mode_result,
-    build_hook_output, build_reason, edits_allowed, handle_subagent_event, parse_hook_input,
-    permission_name, resolve_passthrough, serialize_hook_output,
+    build_codex_hook_output, build_hook_output, build_reason, edits_allowed,
+    handle_subagent_event, parse_hook_input, permission_name, resolve_passthrough,
+    serialize_codex_hook_output, serialize_hook_output,
 };
 use serde_json::json;
 use std::path::Path;
@@ -290,4 +291,94 @@ fn test_serialize_hook_output_includes_updated_input() {
         value["hookSpecificOutput"]["updatedInput"]["command"],
         "rtk git status"
     );
+}
+
+#[test]
+fn test_is_codex_true_when_access_mode_present() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+        "access_mode": "supervised"
+    }))
+    .expect("hook input");
+    assert!(input.is_codex());
+}
+
+#[test]
+fn test_is_codex_true_when_nested_under_hook_event() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+        "hook_event": { "access_mode": "full_access" }
+    }))
+    .expect("hook input");
+    assert!(input.is_codex());
+}
+
+#[test]
+fn test_is_codex_false_for_claude_payload() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+        "permission_mode": "default"
+    }))
+    .expect("hook input");
+    assert!(!input.is_codex());
+}
+
+#[test]
+fn test_build_codex_hook_output_deny_shape_matches_codex_schema() {
+    let output =
+        build_codex_hook_output("deny", "git push origin master: blocks force pushes")
+            .expect("deny should build a codex output");
+    assert_eq!(output.hook_output.event_name, "PreToolUse");
+    assert_eq!(output.hook_output.decision, "deny");
+    assert_eq!(
+        output.hook_output.reason,
+        "git push origin master: blocks force pushes"
+    );
+}
+
+#[test]
+fn test_build_codex_hook_output_returns_none_for_allow() {
+    assert!(build_codex_hook_output("allow", "safe command").is_none());
+}
+
+#[test]
+fn test_build_codex_hook_output_returns_none_for_ask() {
+    assert!(build_codex_hook_output("ask", "needs review").is_none());
+}
+
+#[test]
+fn test_build_codex_hook_output_substitutes_reason_when_blank() {
+    let output = build_codex_hook_output("deny", "   ").expect("deny should build");
+    assert!(
+        !output.hook_output.reason.trim().is_empty(),
+        "codex requires non-empty permissionDecisionReason on deny"
+    );
+}
+
+#[test]
+fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
+    let json = serialize_codex_hook_output("deny", "rm -rf /: filesystem nuke")
+        .expect("deny should serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
+    let hso = &value["hookSpecificOutput"];
+    assert_eq!(hso["hookEventName"], "PreToolUse");
+    assert_eq!(hso["permissionDecision"], "deny");
+    assert_eq!(hso["permissionDecisionReason"], "rm -rf /: filesystem nuke");
+    // Codex's PreToolUseHookSpecificOutputWire enforces deny_unknown_fields and
+    // rejects updatedInput / additionalContext for PreToolUse — make sure we
+    // never emit those.
+    assert!(hso.get("updatedInput").is_none());
+    assert!(hso.get("additionalContext").is_none());
+    // Top-level legacy fields must also not appear for codex pre-tool-use.
+    assert!(value.get("decision").is_none());
+    assert!(value.get("reason").is_none());
+}
+
+#[test]
+fn test_serialize_codex_hook_output_returns_none_for_allow_or_ask() {
+    assert!(serialize_codex_hook_output("allow", "safe").is_none());
+    assert!(serialize_codex_hook_output("ask", "needs review").is_none());
 }
