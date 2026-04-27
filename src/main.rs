@@ -171,11 +171,12 @@ struct HookSpecificOutput {
     updated_input: Option<serde_json::Value>,
 }
 
-/// Codex pre-tool-use schema only accepts `permissionDecision: deny` (with a
-/// non-empty reason) inside `hookSpecificOutput`. `allow`/`ask`/`updatedInput`
-/// trip the codex output validator and surface as
-/// "PreToolUse hook returned unsupported …" warnings, so for those we emit no
-/// stdout at all and let codex's own permission flow take over.
+/// Codex pre-tool-use accepts a strict subset of the Claude schema:
+/// `permissionDecision: allow|deny`, optional `updatedInput`, and
+/// `permissionDecisionReason` (required on deny). `ask` and `additionalContext`
+/// are still rejected by codex's parser, so we never emit them — and we only
+/// emit `allow` when there's an `updatedInput` rewrite worth carrying, since
+/// bare allow is a no-op against codex's own permission flow.
 #[derive(Debug, Serialize)]
 struct CodexHookOutput {
     #[serde(rename = "hookSpecificOutput")]
@@ -190,6 +191,8 @@ struct CodexHookSpecificOutput {
     decision: &'static str,
     #[serde(rename = "permissionDecisionReason")]
     reason: String,
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    updated_input: Option<serde_json::Value>,
 }
 
 /// Check if a Write tool path should be blocked
@@ -221,35 +224,54 @@ fn serialize_hook_output(
     serde_json::to_string(&build_hook_output(decision, reason, updated_input)).ok()
 }
 
-/// Build the codex-shaped output for a deny decision. Returns None for
-/// allow/ask — codex falls through to its own permission flow on empty stdout,
-/// which is what we want.
-fn build_codex_hook_output(decision: &str, reason: &str) -> Option<CodexHookOutput> {
-    if decision != "deny" {
-        return None;
+/// Build the codex-shaped output. Returns None when there is nothing to emit:
+/// - `ask` (codex doesn't support ask in this hook)
+/// - `allow` without an `updatedInput` rewrite (no-op against codex's own flow)
+fn build_codex_hook_output(
+    decision: &str,
+    reason: &str,
+    updated_input: Option<serde_json::Value>,
+) -> Option<CodexHookOutput> {
+    match decision {
+        "deny" => {
+            let trimmed = reason.trim();
+            let reason = if trimmed.is_empty() {
+                "claude-bash-hook denied without a reason".to_string()
+            } else {
+                reason.to_string()
+            };
+            Some(CodexHookOutput {
+                hook_output: CodexHookSpecificOutput {
+                    event_name: "PreToolUse",
+                    decision: "deny",
+                    reason,
+                    updated_input: None,
+                },
+            })
+        }
+        "allow" if updated_input.is_some() => Some(CodexHookOutput {
+            hook_output: CodexHookSpecificOutput {
+                event_name: "PreToolUse",
+                decision: "allow",
+                reason: reason.to_string(),
+                updated_input,
+            },
+        }),
+        _ => None,
     }
-    let trimmed = reason.trim();
-    let reason = if trimmed.is_empty() {
-        "claude-bash-hook denied without a reason".to_string()
-    } else {
-        reason.to_string()
-    };
-    Some(CodexHookOutput {
-        hook_output: CodexHookSpecificOutput {
-            event_name: "PreToolUse",
-            decision: "deny",
-            reason,
-        },
-    })
 }
 
-fn serialize_codex_hook_output(decision: &str, reason: &str) -> Option<String> {
-    serde_json::to_string(&build_codex_hook_output(decision, reason)?).ok()
+fn serialize_codex_hook_output(
+    decision: &str,
+    reason: &str,
+    updated_input: Option<serde_json::Value>,
+) -> Option<String> {
+    serde_json::to_string(&build_codex_hook_output(decision, reason, updated_input)?).ok()
 }
 
-/// Output a hook decision, optionally with a rewritten command. When the
-/// caller is codex, drop `updated_input` (codex schema rejects it) and switch
-/// to the deny-only codex shape.
+/// Output a hook decision, optionally with a rewritten command. Codex accepts
+/// allow + updatedInput and deny + reason; ask and bare allow are dropped on
+/// the codex path so its own permission flow takes over.
 fn output_decision(
     decision: &str,
     reason: &str,
@@ -257,7 +279,7 @@ fn output_decision(
     is_codex: bool,
 ) {
     if is_codex {
-        if let Some(json) = serialize_codex_hook_output(decision, reason) {
+        if let Some(json) = serialize_codex_hook_output(decision, reason, updated_input) {
             println!("{}", json);
         }
         return;
@@ -415,8 +437,7 @@ fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewr
         "decision=passthrough session={:?} command={:?}",
         hook_input.session_id, command
     );
-    // If alias was applied, emit allow with updatedInput so Claude sees the rewritten command
-    // (codex doesn't support updatedInput, so this is a silent no-op there).
+    // If alias was applied, emit allow with updatedInput so the agent sees the rewritten command.
     if alias_rewritten {
         output_decision(
             "allow",
