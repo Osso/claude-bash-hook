@@ -681,6 +681,100 @@ impl ServerHandler for ApprovalServer {
     }
 }
 
+// ── decide subcommand ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct DecideInput {
+    tool_name: String,
+    input: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    permission_suggestions: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    blocked_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "verdict", rename_all = "lowercase")]
+enum CliVerdict {
+    Safe { reason: String },
+    Unsafe { reason: String },
+    Unsure,
+}
+
+async fn run_decide_cli() -> Result<()> {
+    use std::io::{self, BufRead, Write};
+
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+
+    let parsed: DecideInput = match serde_json::from_str(line.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = serde_json::json!({"error": e.to_string()});
+            println!("{}", serde_json::to_string(&err)?);
+            std::process::exit(2);
+        }
+    };
+
+    let tool_name = &parsed.tool_name;
+    let target = rule_target(tool_name, &parsed.input);
+
+    if let Some(ref cwd) = parsed.cwd {
+        info!("decide cwd={cwd}");
+    }
+
+    info!(
+        "decide tool={} target={:?}",
+        tool_name, target
+    );
+
+    let advice = if let Some(mocked) = mock_advice_from_env() {
+        info!(
+            "CLAUDE_APPROVAL_MOCK set; bypassing codex tool={} target={:?}",
+            tool_name, target
+        );
+        mocked
+    } else {
+        ask_codex(
+            tool_name,
+            target.as_deref(),
+            parsed.permission_suggestions.as_deref(),
+            parsed.blocked_path.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|| {
+            warn!("codex unreachable; treating as Unsure");
+            Advice::Unsure
+        })
+    };
+
+    let verdict = match advice {
+        Advice::Safe { reason } => {
+            info!("decide tool={} target={:?} verdict=safe reason={}", tool_name, target, reason);
+            CliVerdict::Safe { reason }
+        }
+        Advice::Unsafe { reason } => {
+            info!("decide tool={} target={:?} verdict=unsafe reason={}", tool_name, target, reason);
+            CliVerdict::Unsafe { reason }
+        }
+        Advice::Unsure => {
+            info!("decide tool={} target={:?} verdict=unsure", tool_name, target);
+            CliVerdict::Unsure
+        }
+    };
+
+    let out = serde_json::to_string(&verdict)?;
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    handle.write_all(out.as_bytes())?;
+    handle.write_all(b"\n")?;
+    handle.flush()?;
+
+    Ok(())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let _ = systemd_journal_logger::JournalLog::new().map(|l| {
@@ -688,6 +782,12 @@ async fn main() -> Result<()> {
             .install()
     });
     log::set_max_level(log::LevelFilter::Info);
+
+    let mut args = std::env::args();
+    let _ = args.next(); // skip argv[0]
+    if args.next().as_deref() == Some("decide") {
+        return run_decide_cli().await;
+    }
 
     let service = ApprovalServer::new();
     let server = service.serve(stdio()).await?;
@@ -1066,6 +1166,70 @@ mod tests {
             p.contains(r#""behavior":"allow""#) || p.contains(r#""behavior": "allow""#),
             "prompt: {p}"
         );
+    }
+
+    #[test]
+    fn cli_verdict_safe_serializes_with_reason() {
+        let v = CliVerdict::Safe {
+            reason: "read-only".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_string(&v).unwrap(),
+            r#"{"verdict":"safe","reason":"read-only"}"#
+        );
+    }
+
+    #[test]
+    fn cli_verdict_unsafe_serializes_with_reason() {
+        let v = CliVerdict::Unsafe {
+            reason: "destroys data".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_string(&v).unwrap(),
+            r#"{"verdict":"unsafe","reason":"destroys data"}"#
+        );
+    }
+
+    #[test]
+    fn cli_verdict_unsure_omits_reason() {
+        assert_eq!(
+            serde_json::to_string(&CliVerdict::Unsure).unwrap(),
+            r#"{"verdict":"unsure"}"#
+        );
+    }
+
+    #[test]
+    fn decide_input_parses_full_payload() {
+        let json = r#"{
+            "tool_name": "Bash",
+            "input": {"command": "ls -la"},
+            "cwd": "/home/osso/Repos/ask",
+            "permission_suggestions": [{"behavior":"allow","rule":"git status"}],
+            "blocked_path": "/etc/passwd"
+        }"#;
+        let d: DecideInput = serde_json::from_str(json).unwrap();
+        assert_eq!(d.tool_name, "Bash");
+        assert_eq!(
+            d.input.get("command").and_then(|v| v.as_str()),
+            Some("ls -la")
+        );
+        assert_eq!(d.cwd.as_deref(), Some("/home/osso/Repos/ask"));
+        assert!(d.permission_suggestions.is_some());
+        assert_eq!(
+            d.permission_suggestions.as_ref().unwrap().len(),
+            1
+        );
+        assert_eq!(d.blocked_path.as_deref(), Some("/etc/passwd"));
+    }
+
+    #[test]
+    fn decide_input_parses_minimal_payload() {
+        let json = r#"{"tool_name":"Bash","input":{"command":"ls"}}"#;
+        let d: DecideInput = serde_json::from_str(json).unwrap();
+        assert_eq!(d.tool_name, "Bash");
+        assert!(d.cwd.is_none());
+        assert!(d.permission_suggestions.is_none());
+        assert!(d.blocked_path.is_none());
     }
 
     #[test]
