@@ -681,6 +681,180 @@ impl ServerHandler for ApprovalServer {
     }
 }
 
+// ── persist-rule subcommand ──────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct PersistRuleInput {
+    tool_name: String,
+    input: HashMap<String, serde_json::Value>,
+    feedback: String,
+    #[serde(default)]
+    cwd: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PersistRuleOutput {
+    rule_written: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commands: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn build_persist_prompt(target: &str, feedback: &str) -> String {
+    format!(
+        "A user wants to permanently auto-approve a class of bash commands.\n\
+         \n\
+         Original command: {target}\n\
+         User's intent: {feedback}\n\
+         \n\
+         Output ONLY a JSON array of bash command prefixes that should be auto-approved\n\
+         based on this intent. Stay conservative — only include commands you would\n\
+         allow without asking. Each prefix is matched as a literal string at the\n\
+         start of the bash invocation, so \"git status\" allows `git status`, `git status -s`,\n\
+         `git status --short`, etc. Do NOT include destructive commands.\n\
+         \n\
+         Example output: [\"git status\", \"git log\", \"git diff\", \"git show\"]"
+    )
+}
+
+fn parse_command_list(text: &str) -> Option<Vec<String>> {
+    let trimmed = text.trim();
+    // Strip markdown code fences if present.
+    let json_str = if trimmed.starts_with("```") {
+        let without_open = trimmed.trim_start_matches('`');
+        // Strip optional language tag (e.g. "json\n")
+        let after_tag = if let Some(nl) = without_open.find('\n') {
+            &without_open[nl + 1..]
+        } else {
+            without_open
+        };
+        // Strip closing fence
+        let stripped = if let Some(close) = after_tag.rfind("```") {
+            &after_tag[..close]
+        } else {
+            after_tag
+        };
+        stripped.trim()
+    } else {
+        trimmed
+    };
+
+    let list: Vec<String> = serde_json::from_str(json_str).ok()?;
+    // Trim each entry and deduplicate, preserving first-seen order.
+    let mut seen = std::collections::HashSet::new();
+    let deduped: Vec<String> = list
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && seen.insert(s.clone()))
+        .collect();
+    if deduped.is_empty() {
+        None
+    } else {
+        Some(deduped)
+    }
+}
+
+async fn ask_codex_for_commands(target: &str, feedback: &str) -> Option<Vec<String>> {
+    use llm_sdk::Backend;
+    use llm_sdk::codex_cli::CodexCli;
+
+    // Allow CLAUDE_APPROVAL_MOCK to short-circuit codex during tests.
+    if let Ok(mock) = std::env::var("CLAUDE_APPROVAL_MOCK") {
+        if let Some(rest) = mock.strip_prefix("mock-commands:") {
+            return parse_command_list(rest);
+        }
+    }
+
+    let backend = CodexCli::new()
+        .ok()?
+        .model(CODEX_MODEL)
+        .timeout(CODEX_TIMEOUT);
+    let prompt = build_persist_prompt(target, feedback);
+    let output = backend.complete(&prompt).await.ok()?;
+    parse_command_list(&output.text)
+}
+
+async fn run_persist_rule_cli() -> Result<()> {
+    use std::io::{self, BufRead, Write};
+
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+
+    let parsed: PersistRuleInput = match serde_json::from_str(line.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = serde_json::json!({"error": e.to_string()});
+            println!("{}", serde_json::to_string(&err)?);
+            std::process::exit(2);
+        }
+    };
+
+    if let Some(ref cwd) = parsed.cwd {
+        info!("persist-rule cwd={cwd}");
+    }
+
+    let stdout = io::stdout();
+
+    let emit = |out: &PersistRuleOutput| -> Result<()> {
+        let mut handle = stdout.lock();
+        handle.write_all(serde_json::to_string(out)?.as_bytes())?;
+        handle.write_all(b"\n")?;
+        handle.flush()?;
+        Ok(())
+    };
+
+    if parsed.tool_name != "Bash" {
+        return emit(&PersistRuleOutput {
+            rule_written: false,
+            commands: None,
+            reason: None,
+            error: Some("persist-rule v1 only supports tool_name=Bash".to_string()),
+        });
+    }
+
+    let target = match parsed.input.get("command").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => {
+            return emit(&PersistRuleOutput {
+                rule_written: false,
+                commands: None,
+                reason: None,
+                error: Some("missing command".to_string()),
+            });
+        }
+    };
+
+    let commands = match ask_codex_for_commands(&target, &parsed.feedback).await {
+        Some(cmds) => cmds,
+        None => {
+            return emit(&PersistRuleOutput {
+                rule_written: false,
+                commands: None,
+                reason: None,
+                error: Some("codex returned no usable commands".to_string()),
+            });
+        }
+    };
+
+    let reason = format!("user: {}", parsed.feedback);
+    for cmd in &commands {
+        match config_writer::append_bash_allow_rule(cmd, &reason) {
+            Ok(()) => info!("persisted bash allow rule cmd={cmd:?}"),
+            Err(e) => warn!("persist failed cmd={cmd:?} err={e}"),
+        }
+    }
+
+    emit(&PersistRuleOutput {
+        rule_written: true,
+        commands: Some(commands),
+        reason: Some(reason),
+        error: None,
+    })
+}
+
 // ── decide subcommand ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -783,10 +957,10 @@ async fn main() -> Result<()> {
     });
     log::set_max_level(log::LevelFilter::Info);
 
-    let mut args = std::env::args();
-    let _ = args.next(); // skip argv[0]
-    if args.next().as_deref() == Some("decide") {
-        return run_decide_cli().await;
+    match std::env::args().nth(1).as_deref() {
+        Some("decide") => return run_decide_cli().await,
+        Some("persist-rule") => return run_persist_rule_cli().await,
+        _ => {}
     }
 
     let service = ApprovalServer::new();
@@ -1244,5 +1418,78 @@ mod tests {
         assert!(sug_line.ends_with('\u{2026}'), "line: {sug_line}");
         // 2 spaces indent + up to 199 chars + 3-byte ellipsis = at most 204 bytes
         assert!(sug_line.len() <= 205, "line len={}", sug_line.len());
+    }
+
+    // ── persist-rule tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn build_persist_prompt_includes_target_and_feedback() {
+        let p = build_persist_prompt("git status", "approve any read-only git command");
+        assert!(p.contains("git status"), "prompt missing target");
+        assert!(
+            p.contains("approve any read-only git command"),
+            "prompt missing feedback"
+        );
+    }
+
+    #[test]
+    fn parse_command_list_plain_json() {
+        let result = parse_command_list(r#"["git status", "git log"]"#);
+        assert_eq!(result, Some(vec!["git status".to_string(), "git log".to_string()]));
+    }
+
+    #[test]
+    fn parse_command_list_fenced_json() {
+        let fenced = "```json\n[\"cargo build\", \"cargo test\"]\n```";
+        let result = parse_command_list(fenced);
+        assert_eq!(
+            result,
+            Some(vec!["cargo build".to_string(), "cargo test".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_command_list_garbage_returns_none() {
+        assert_eq!(parse_command_list("no idea"), None);
+    }
+
+    #[test]
+    fn parse_command_list_dedupes_and_trims() {
+        let result = parse_command_list(r#"[" git status", "git status", " git log "]"#);
+        assert_eq!(
+            result,
+            Some(vec!["git status".to_string(), "git log".to_string()])
+        );
+    }
+
+    #[test]
+    fn persist_rule_output_serializes_success() {
+        let out = PersistRuleOutput {
+            rule_written: true,
+            commands: Some(vec!["git status".to_string(), "git log".to_string()]),
+            reason: Some("user: approve git reads".to_string()),
+            error: None,
+        };
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
+        assert_eq!(json["rule_written"], true);
+        assert_eq!(json["commands"][0], "git status");
+        assert_eq!(json["commands"][1], "git log");
+        assert_eq!(json["reason"], "user: approve git reads");
+        assert!(json.get("error").is_none() || json["error"].is_null());
+    }
+
+    #[test]
+    fn persist_rule_output_serializes_skipped() {
+        let out = PersistRuleOutput {
+            rule_written: false,
+            commands: None,
+            reason: None,
+            error: Some("persist-rule v1 only supports tool_name=Bash".to_string()),
+        };
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
+        assert_eq!(json["rule_written"], false);
+        assert_eq!(json["error"], "persist-rule v1 only supports tool_name=Bash");
+        assert!(json.get("commands").is_none() || json["commands"].is_null());
+        assert!(json.get("reason").is_none() || json["reason"].is_null());
     }
 }
