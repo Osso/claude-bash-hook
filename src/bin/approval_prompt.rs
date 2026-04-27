@@ -8,9 +8,16 @@
 //! - `{"behavior":"deny","message":"..."}`
 //! - allow + remember: add `updatedPermissions:[{type:"addRules",...}]`
 //!
-//! Flow: Codex decides SAFE/UNSAFE/UNSURE. SAFE → allow + session-scoped
-//! remember. UNSAFE → deny with Codex's reason. UNSURE → allow-once (task #3
-//! will replace this with an interactive TUI prompt).
+//! Flow:
+//!   1. `pre_classify` short-circuits file-edit tools (Edit/Write/MultiEdit/
+//!      NotebookEdit) when the target lives inside the agent's working scope
+//!      (cwd / worktree / `/tmp`). Editing inside scope is the worker's job,
+//!      so it is classified SAFE without spending a Codex call.
+//!   2. Outside-scope edits and Bash invocations consult Codex via tool-
+//!      specific prompts (`build_prompt_edit` frames the question as scope-
+//!      escape; `build_prompt_bash` keeps the read-vs-write taxonomy).
+//!   3. SAFE → allow + session-scoped remember. UNSAFE → deny with Codex's
+//!      reason. UNSURE → MCP elicitation; falls back to allow-once.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -100,18 +107,92 @@ fn rule_target(tool_name: &str, input: &HashMap<String, serde_json::Value>) -> O
     }
 }
 
-fn build_prompt(
+/// Returns true when `tool_name` is one of the file-mutating tools whose
+/// "is this safe?" question collapses to "is this an in-scope edit?".
+fn is_file_edit_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
+    )
+}
+
+/// Normalize `path` to an absolute path with `.` and `..` components
+/// resolved lexically. Does not resolve symlinks (tolerates non-existent
+/// paths so Write-to-new-file still classifies). Returns None when the
+/// path can't even be made absolute.
+fn normalize_abs(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::{Component, PathBuf};
+    let abs = std::path::absolute(path).ok()?;
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    Some(out)
+}
+
+/// Returns true when `path` resolves inside the agent's working scope —
+/// either `cwd` (which for ask-spawned sessions is a `.claude/worktrees/*`
+/// directory) or `/tmp`. Falls back to the hook process's `current_dir`
+/// when no `cwd` is supplied (the MCP server path).
+fn is_in_agent_scope(path: &str, cwd: Option<&str>) -> bool {
+    use std::path::{Path, PathBuf};
+
+    let target = match normalize_abs(Path::new(path)) {
+        Some(p) => p,
+        None => return false,
+    };
+    if target.starts_with("/tmp") {
+        return true;
+    }
+    let cwd_raw: PathBuf = match cwd {
+        Some(s) => PathBuf::from(s),
+        None => match std::env::current_dir() {
+            Ok(p) => p,
+            Err(_) => return false,
+        },
+    };
+    let cwd_norm = match normalize_abs(&cwd_raw) {
+        Some(p) => p,
+        None => return false,
+    };
+    target.starts_with(&cwd_norm)
+}
+
+/// Pre-classification before consulting Codex. Returns `Some(Safe)` for
+/// file-edit tools whose target sits inside the agent's working scope —
+/// editing files is the worker's job, so it shouldn't be billed to the
+/// LLM-judgement budget. Bash and out-of-scope edits return `None` and
+/// flow on to Codex.
+fn pre_classify(
     tool_name: &str,
     target: Option<&str>,
+    cwd: Option<&str>,
+) -> Option<Advice> {
+    if !is_file_edit_tool(tool_name) {
+        return None;
+    }
+    let path = target?;
+    if is_in_agent_scope(path, cwd) {
+        return Some(Advice::Safe {
+            reason: "edit inside agent scope (cwd/worktree/tmp)".to_string(),
+        });
+    }
+    None
+}
+
+/// Append the shared `Blocked path` and `Policy suggestions` block used
+/// by every prompt variant.
+fn append_extras(
+    extras: &mut String,
     suggestions: Option<&[serde_json::Value]>,
     blocked_path: Option<&str>,
-) -> String {
-    let target_line = target
-        .map(|t| format!("Target: {}", t))
-        .unwrap_or_else(|| "Target: (no recognizable target field)".to_string());
-
-    let mut extras = String::new();
-
+) {
     if let Some(path) = blocked_path {
         extras.push_str(&format!("\nBlocked path: {path}"));
     }
@@ -132,6 +213,36 @@ fn build_prompt(
             }
         }
     }
+}
+
+fn build_prompt(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+) -> String {
+    if is_file_edit_tool(tool_name) {
+        build_prompt_edit(tool_name, target, suggestions, blocked_path)
+    } else {
+        build_prompt_bash(tool_name, target, suggestions, blocked_path)
+    }
+}
+
+/// Codex prompt for Bash and other side-effecting tools. The read-vs-
+/// write taxonomy is meaningful here: `ls -la` is SAFE, `rm -rf /` is
+/// UNSAFE.
+fn build_prompt_bash(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+) -> String {
+    let target_line = target
+        .map(|t| format!("Target: {}", t))
+        .unwrap_or_else(|| "Target: (no recognizable target field)".to_string());
+
+    let mut extras = String::new();
+    append_extras(&mut extras, suggestions, blocked_path);
 
     format!(
         "An AI coding agent wants to use tool `{tool_name}`.\n\
@@ -142,6 +253,43 @@ fn build_prompt(
          \n\
          SAFE <reason>   — routine, read-only, or clearly harmless\n\
          UNSAFE <reason> — modifies important state, leaks secrets, or risky\n\
+         UNSURE <reason> — ambiguous; let the human decide\n\
+         \n\
+         Err UNSURE for anything you're not confident about."
+    )
+}
+
+/// Codex prompt for file-edit tools (Edit/Write/MultiEdit/NotebookEdit)
+/// that escaped the in-scope pre-classification. The question is no
+/// longer "is editing risky?" — editing is the worker's job — but
+/// "is this a deliberate scope escape?".
+fn build_prompt_edit(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+) -> String {
+    let target_line = target
+        .map(|t| format!("Target: {}", t))
+        .unwrap_or_else(|| "Target: (no recognizable target field)".to_string());
+
+    let mut extras = String::new();
+    append_extras(&mut extras, suggestions, blocked_path);
+
+    format!(
+        "An AI coding agent wants to use tool `{tool_name}` to modify a file OUTSIDE \
+         its working scope (cwd / worktree / `/tmp`).\n\
+         {target_line}{extras}\n\
+         \n\
+         Editing files is the agent's normal job; the question is whether THIS path \
+         is a deliberate, expected target — not whether file edits are risky in \
+         general.\n\
+         Reply with EXACTLY one of, followed by a one-line reason:\n\
+         \n\
+         SAFE <reason>   — explicitly intended target outside scope (e.g. shared \
+         config the user asked to update)\n\
+         UNSAFE <reason> — apparent scope escape: system files, secrets, dotfiles, \
+         parent project state, or anywhere edits would be hard to undo\n\
          UNSURE <reason> — ambiguous; let the human decide\n\
          \n\
          Err UNSURE for anything you're not confident about."
@@ -614,6 +762,12 @@ impl ApprovalServer {
                 params.tool_name, target
             );
             mocked
+        } else if let Some(pre) = pre_classify(&params.tool_name, target.as_deref(), None) {
+            info!(
+                "pre-classified SAFE (in-scope edit) tool={} target={:?}",
+                params.tool_name, target
+            );
+            pre
         } else {
             ask_codex(
                 &params.tool_name,
@@ -910,6 +1064,14 @@ async fn run_decide_cli() -> Result<()> {
             tool_name, target
         );
         mocked
+    } else if let Some(pre) =
+        pre_classify(tool_name, target.as_deref(), parsed.cwd.as_deref())
+    {
+        info!(
+            "pre-classified SAFE (in-scope edit) tool={} target={:?} cwd={:?}",
+            tool_name, target, parsed.cwd
+        );
+        pre
     } else {
         ask_codex(
             tool_name,
@@ -1301,6 +1463,103 @@ mod tests {
             } => assert!(updated_permissions.is_empty()),
             _ => panic!("expected Allow"),
         }
+    }
+
+    #[test]
+    fn pre_classify_returns_none_for_bash() {
+        assert!(pre_classify("Bash", Some("rm -rf /"), Some("/tmp")).is_none());
+    }
+
+    #[test]
+    fn pre_classify_returns_none_for_unknown_tool() {
+        assert!(pre_classify("Mystery", Some("/tmp/x"), Some("/tmp")).is_none());
+    }
+
+    #[test]
+    fn pre_classify_safe_when_path_under_cwd() {
+        let advice = pre_classify("Edit", Some("/tmp/work/file.rs"), Some("/tmp/work"));
+        assert!(matches!(advice, Some(Advice::Safe { .. })));
+    }
+
+    #[test]
+    fn pre_classify_safe_when_path_under_tmp() {
+        let advice = pre_classify(
+            "Write",
+            Some("/tmp/scratch/output.log"),
+            Some("/home/user/project"),
+        );
+        assert!(matches!(advice, Some(Advice::Safe { .. })));
+    }
+
+    #[test]
+    fn pre_classify_none_when_path_outside_cwd_and_tmp() {
+        let advice = pre_classify(
+            "Edit",
+            Some("/etc/passwd"),
+            Some("/home/user/project"),
+        );
+        assert!(advice.is_none());
+    }
+
+    #[test]
+    fn pre_classify_none_when_target_missing() {
+        assert!(pre_classify("Edit", None, Some("/tmp")).is_none());
+    }
+
+    #[test]
+    fn pre_classify_none_for_traversal_escape() {
+        // /tmp/../etc/passwd normalizes to /etc/passwd → outside scope.
+        let advice = pre_classify(
+            "Edit",
+            Some("/tmp/../etc/passwd"),
+            Some("/home/user/project"),
+        );
+        assert!(
+            advice.is_none(),
+            "traversal escape must not pre-classify SAFE"
+        );
+    }
+
+    #[test]
+    fn pre_classify_safe_for_multiedit_under_cwd() {
+        let advice = pre_classify(
+            "MultiEdit",
+            Some("/home/user/proj/src/lib.rs"),
+            Some("/home/user/proj"),
+        );
+        assert!(matches!(advice, Some(Advice::Safe { .. })));
+    }
+
+    #[test]
+    fn pre_classify_safe_for_notebookedit_under_tmp() {
+        let advice = pre_classify("NotebookEdit", Some("/tmp/nb.ipynb"), Some("/elsewhere"));
+        assert!(matches!(advice, Some(Advice::Safe { .. })));
+    }
+
+    #[test]
+    fn build_prompt_edit_frames_as_scope_escape() {
+        let p = build_prompt("Edit", Some("/etc/passwd"), None, None);
+        assert!(
+            p.contains("OUTSIDE"),
+            "edit prompt should mention OUTSIDE scope; got: {p}"
+        );
+        assert!(
+            p.contains("scope escape") || p.contains("scope"),
+            "edit prompt should reference scope; got: {p}"
+        );
+        // The bash-style "modifies important state" framing must NOT
+        // appear in the edit prompt.
+        assert!(
+            !p.contains("modifies important state"),
+            "edit prompt must not reuse bash framing; got: {p}"
+        );
+    }
+
+    #[test]
+    fn build_prompt_bash_unchanged_for_bash() {
+        let p = build_prompt("Bash", Some("ls"), None, None);
+        assert!(p.contains("modifies important state"), "got: {p}");
+        assert!(!p.contains("OUTSIDE"), "got: {p}");
     }
 
     #[test]
