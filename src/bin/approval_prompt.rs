@@ -89,6 +89,7 @@ enum Decision {
 
 // ── Codex advice ─────────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 enum Advice {
     Safe { reason: String },
     Unsafe { reason: String },
@@ -136,10 +137,38 @@ fn normalize_abs(path: &std::path::Path) -> Option<std::path::PathBuf> {
     Some(out)
 }
 
+/// Resolve `p` to a real path, walking up the existing prefix when the
+/// tail doesn't exist yet (e.g. Write to a new file). Returns the
+/// canonicalized prefix joined with the lexical tail. None if no
+/// component of `p` exists.
+fn canonicalize_loose(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut existing = p.to_path_buf();
+    let mut suffix = PathBuf::new();
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(&existing) {
+            return Some(if suffix.as_os_str().is_empty() {
+                canon
+            } else {
+                canon.join(suffix)
+            });
+        }
+        let basename = existing.file_name()?.to_owned();
+        if !existing.pop() {
+            return None;
+        }
+        suffix = std::path::PathBuf::from(&basename).join(&suffix);
+    }
+}
+
 /// Returns true when `path` resolves inside the agent's working scope —
 /// either `cwd` (which for ask-spawned sessions is a `.claude/worktrees/*`
 /// directory) or `/tmp`. Falls back to the hook process's `current_dir`
 /// when no `cwd` is supplied (the MCP server path).
+///
+/// Compares lexically first; if that misses, retries with symlink-resolved
+/// paths so a `/home/user/Projects/...` symlink and a `/syncthing/...`
+/// canonical cwd still match.
 fn is_in_agent_scope(path: &str, cwd: Option<&str>) -> bool {
     use std::path::{Path, PathBuf};
 
@@ -161,7 +190,16 @@ fn is_in_agent_scope(path: &str, cwd: Option<&str>) -> bool {
         Some(p) => p,
         None => return false,
     };
-    target.starts_with(&cwd_norm)
+    if target.starts_with(&cwd_norm) {
+        return true;
+    }
+    // Symlink fallback: resolve both sides via canonicalize and retry.
+    let target_canon = canonicalize_loose(&target);
+    let cwd_canon = std::fs::canonicalize(&cwd_norm).ok();
+    if let (Some(t), Some(c)) = (target_canon, cwd_canon) {
+        return t.starts_with(c);
+    }
+    false
 }
 
 /// Pre-classification before consulting Codex. Returns `Some(Safe)` for
@@ -228,9 +266,10 @@ fn build_prompt(
     }
 }
 
-/// Codex prompt for Bash and other side-effecting tools. The read-vs-
-/// write taxonomy is meaningful here: `ls -la` is SAFE, `rm -rf /` is
-/// UNSAFE.
+/// Codex prompt for Bash and other side-effecting tools. Classification
+/// is based on REVERSIBILITY and BLAST RADIUS, not on whether the
+/// command writes anything: an AI coding agent's job is to modify
+/// project state, so "modifies state" cannot be the unsafe signal.
 fn build_prompt_bash(
     tool_name: &str,
     target: Option<&str>,
@@ -251,11 +290,25 @@ fn build_prompt_bash(
          Decide whether this should be auto-allowed for the rest of the session.\n\
          Reply with EXACTLY one of, followed by a one-line reason:\n\
          \n\
-         SAFE <reason>   — routine, read-only, or clearly harmless\n\
-         UNSAFE <reason> — modifies important state, leaks secrets, or risky\n\
+         SAFE <reason>   — read-only OR easily reversible inside the project\n\
+                          (git commit/branch/merge/rebase/stash/reset, mkdir,\n\
+                          touch, file edits in cwd, cargo build, npm install,\n\
+                          curl GET, docker build). Anything you can undo with\n\
+                          a follow-up command in the same repo is SAFE.\n\
+         UNSAFE <reason> — IRREVERSIBLE or BLAST RADIUS beyond the repo\n\
+                          (`rm -rf` outside cwd, `dd of=/dev/...`,\n\
+                          `git push --force` to shared branches, `DROP TABLE`\n\
+                          on prod, `kubectl delete` on prod, `sudo` mutating\n\
+                          system state, `curl ... | sh`, sending real email\n\
+                          / Slack / API calls to third-party services).\n\
          UNSURE <reason> — ambiguous; let the human decide\n\
          \n\
-         Err UNSURE for anything you're not confident about."
+         Modifying repository state is the AGENT'S JOB. Don't flag a command \
+         UNSAFE just because it writes files, creates commits, or changes git \
+         history — those are recoverable. Reserve UNSAFE for things a human \
+         would also want a chance to refuse.\n\
+         \n\
+         Err UNSURE — not UNSAFE — for anything you're not confident about."
     )
 }
 
@@ -296,7 +349,10 @@ fn build_prompt_edit(
     )
 }
 
-async fn ask_codex(
+/// In-process Codex call. Used by the CLI `decide` subcommand. The MCP
+/// server path goes through `ask_codex_subprocess` instead so classifier
+/// updates take effect without restarting long-lived MCP sessions.
+async fn ask_codex_inproc(
     tool_name: &str,
     target: Option<&str>,
     suggestions: Option<&[serde_json::Value]>,
@@ -312,6 +368,80 @@ async fn ask_codex(
     let prompt = build_prompt(tool_name, target, suggestions, blocked_path);
     let output = backend.complete(&prompt).await.ok()?;
     Some(parse_advice(&output.text))
+}
+
+/// Spawn `<self> decide` as a subprocess and parse its JSON verdict.
+/// The MCP server is long-lived per Claude Code session, so calling
+/// Codex in-process would freeze the classifier at session start. Each
+/// approval shells out to a fresh subprocess instead, picking up any
+/// post-deploy binary on disk via `current_exe()`.
+async fn ask_codex_subprocess(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+) -> Option<Advice> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command;
+
+    let exe = std::env::current_exe().ok()?;
+
+    let input_field = match tool_name {
+        "Bash" => serde_json::json!({"command": target.unwrap_or("")}),
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Read" => {
+            serde_json::json!({"file_path": target.unwrap_or("")})
+        }
+        _ => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    let payload = serde_json::json!({
+        "tool_name": tool_name,
+        "input": input_field,
+        "permission_suggestions": suggestions,
+        "blocked_path": blocked_path,
+    });
+    let payload_str = serde_json::to_string(&payload).ok()?;
+
+    let mut child = Command::new(&exe)
+        .arg("decide")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let mut stdin = child.stdin.take()?;
+    stdin.write_all(payload_str.as_bytes()).await.ok()?;
+    stdin.write_all(b"\n").await.ok()?;
+    drop(stdin);
+
+    let output = child.wait_with_output().await.ok()?;
+    if !output.status.success() {
+        warn!(
+            "decide subprocess exited non-zero ({:?}); treating as Unsure",
+            output.status.code()
+        );
+        return None;
+    }
+    parse_decide_output(&output.stdout)
+}
+
+/// Parse the JSON line emitted by `run_decide_cli`: `{"verdict":"safe|unsafe|unsure","reason":"…"}`.
+fn parse_decide_output(stdout: &[u8]) -> Option<Advice> {
+    let text = std::str::from_utf8(stdout).ok()?.trim();
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let verdict = v.get("verdict")?.as_str()?;
+    let reason = v
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+    match verdict {
+        "safe" => Some(Advice::Safe { reason }),
+        "unsafe" => Some(Advice::Unsafe { reason }),
+        "unsure" => Some(Advice::Unsure),
+        _ => None,
+    }
 }
 
 /// Bypass codex when `CLAUDE_APPROVAL_MOCK` is set, so the MCP protocol path
@@ -611,6 +741,7 @@ impl ApprovalServer {
         params: &ApprovalInput,
         target: &Option<String>,
         ctx: &RequestContext<RoleServer>,
+        hint: &str,
     ) -> Decision {
         let allow_once = || Decision::Allow {
             updated_input: params.input.clone(),
@@ -630,7 +761,7 @@ impl ApprovalServer {
             return allow_once();
         }
 
-        let req = elicit::build_request(&params.tool_name, t, "codex unsure");
+        let req = elicit::build_request(&params.tool_name, t, hint);
         let result = match ctx.peer.create_elicitation(req).await {
             Ok(r) => r,
             Err(e) => {
@@ -689,51 +820,27 @@ impl ApprovalServer {
         }
     }
 
-    fn decide(params: &ApprovalInput, advice: Advice) -> Decision {
+    /// Build an Allow decision for SAFE advice, attaching a session-scoped
+    /// allow rule for the recognized target. Unsafe and Unsure are routed
+    /// through `handle_unsure` instead of this path.
+    fn decide_safe(params: &ApprovalInput, reason: String) -> Decision {
         let target = rule_target(&params.tool_name, &params.input);
-        match advice {
-            Advice::Safe { reason } => {
-                info!(
-                    "codex SAFE tool={} target={:?} reason={}",
-                    params.tool_name, target, reason
-                );
-                let remember = target.as_ref().map(|t| AddRulesUpdate {
-                    kind: "addRules",
-                    destination: "session",
-                    behavior: "allow",
-                    rules: vec![PermissionRule {
-                        tool_name: params.tool_name.clone(),
-                        rule_content: Some(t.clone()),
-                    }],
-                });
-                Decision::Allow {
-                    updated_input: params.input.clone(),
-                    updated_permissions: remember.into_iter().collect(),
-                }
-            }
-            Advice::Unsafe { reason } => {
-                info!(
-                    "codex UNSAFE tool={} target={:?} reason={}",
-                    params.tool_name, target, reason
-                );
-                Decision::Deny {
-                    message: if reason.is_empty() {
-                        "Codex flagged this tool call as unsafe".to_string()
-                    } else {
-                        format!("Codex: {reason}")
-                    },
-                }
-            }
-            Advice::Unsure => {
-                info!(
-                    "codex UNSURE (or unreachable) tool={} target={:?} — allow-once fallback",
-                    params.tool_name, target
-                );
-                Decision::Allow {
-                    updated_input: params.input.clone(),
-                    updated_permissions: Vec::new(),
-                }
-            }
+        info!(
+            "codex SAFE tool={} target={:?} reason={}",
+            params.tool_name, target, reason
+        );
+        let remember = target.as_ref().map(|t| AddRulesUpdate {
+            kind: "addRules",
+            destination: "session",
+            behavior: "allow",
+            rules: vec![PermissionRule {
+                tool_name: params.tool_name.clone(),
+                rule_content: Some(t.clone()),
+            }],
+        });
+        Decision::Allow {
+            updated_input: params.input.clone(),
+            updated_permissions: remember.into_iter().collect(),
         }
     }
 }
@@ -769,7 +876,7 @@ impl ApprovalServer {
             );
             pre
         } else {
-            ask_codex(
+            ask_codex_subprocess(
                 &params.tool_name,
                 target.as_deref(),
                 params.permission_suggestions.as_deref(),
@@ -777,9 +884,9 @@ impl ApprovalServer {
             )
             .await
             .unwrap_or_else(|| {
-                    warn!("codex unreachable; falling back to Unsure");
-                    Advice::Unsure
-                })
+                warn!("decide subprocess unreachable; falling back to Unsure");
+                Advice::Unsure
+            })
         };
 
         // Capture SAFE reason before `decide` consumes `advice`; used only
@@ -794,13 +901,34 @@ impl ApprovalServer {
             _ => None,
         };
 
-        // On UNSURE, ask the user via MCP elicitation. Claude Code renders
-        // a 3-choice prompt in its own UI (no TTY/GUI dialog needed). On
-        // missing capability or error, fall back to allow-once.
-        let decision = if matches!(advice, Advice::Unsure) {
-            self.handle_unsure(&params, &target, &ctx).await
-        } else {
-            Self::decide(&params, advice)
+        // SAFE auto-allows. Anything else (UNSURE / UNSAFE) routes through
+        // MCP elicitation so the user gets a 3-choice (deny / once / always)
+        // prompt instead of being silently denied. UNSAFE was previously a
+        // hard deny, but Codex calls every state-changing command "unsafe"
+        // (git merge, git rebase, …) so the deny path was a usability wall
+        // rather than a safety net.
+        let decision = match advice {
+            Advice::Safe { reason } => Self::decide_safe(&params, reason),
+            Advice::Unsure => {
+                info!(
+                    "codex UNSURE tool={} target={:?} — eliciting",
+                    params.tool_name, target
+                );
+                self.handle_unsure(&params, &target, &ctx, "codex unsure")
+                    .await
+            }
+            Advice::Unsafe { reason } => {
+                info!(
+                    "codex UNSAFE tool={} target={:?} reason={} — eliciting",
+                    params.tool_name, target, reason
+                );
+                let hint = if reason.is_empty() {
+                    "codex flagged as unsafe".to_string()
+                } else {
+                    format!("codex: {reason}")
+                };
+                self.handle_unsure(&params, &target, &ctx, &hint).await
+            }
         };
 
         if let (Some(reason), Some(cmd)) = (persist_reason, target.as_deref()) {
@@ -1073,7 +1201,7 @@ async fn run_decide_cli() -> Result<()> {
         );
         pre
     } else {
-        ask_codex(
+        ask_codex_inproc(
             tool_name,
             target.as_deref(),
             parsed.permission_suggestions.as_deref(),
@@ -1172,6 +1300,37 @@ mod tests {
     }
 
     #[test]
+    fn parse_decide_output_safe() {
+        let bytes = br#"{"verdict":"safe","reason":"git merge is reversible"}"#;
+        match parse_decide_output(bytes) {
+            Some(Advice::Safe { reason }) => assert_eq!(reason, "git merge is reversible"),
+            other => panic!("expected Safe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_decide_output_unsafe() {
+        let bytes = br#"{"verdict":"unsafe","reason":"rm -rf /"}"#;
+        match parse_decide_output(bytes) {
+            Some(Advice::Unsafe { reason }) => assert_eq!(reason, "rm -rf /"),
+            other => panic!("expected Unsafe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_decide_output_unsure() {
+        let bytes = br#"{"verdict":"unsure"}"#;
+        assert!(matches!(parse_decide_output(bytes), Some(Advice::Unsure)));
+    }
+
+    #[test]
+    fn parse_decide_output_garbage_returns_none() {
+        assert!(parse_decide_output(b"not json").is_none());
+        assert!(parse_decide_output(b"{}").is_none());
+        assert!(parse_decide_output(br#"{"verdict":"maybe"}"#).is_none());
+    }
+
+    #[test]
     fn mock_advice_safe() {
         assert!(matches!(
             mock_advice_from_str("safe"),
@@ -1241,12 +1400,7 @@ mod tests {
             permission_suggestions: None,
             blocked_path: None,
         };
-        let d = ApprovalServer::decide(
-            &params,
-            Advice::Safe {
-                reason: "read-only".into(),
-            },
-        );
+        let d = ApprovalServer::decide_safe(&params, "read-only".into());
         match d {
             Decision::Allow {
                 updated_permissions,
@@ -1260,27 +1414,6 @@ mod tests {
                 );
             }
             _ => panic!("expected Allow"),
-        }
-    }
-
-    #[test]
-    fn decide_unsafe_emits_deny_with_reason() {
-        let params = ApprovalInput {
-            tool_name: "Bash".into(),
-            input: input(&[("command", "rm -rf /")]),
-            tool_use_id: None,
-            permission_suggestions: None,
-            blocked_path: None,
-        };
-        let d = ApprovalServer::decide(
-            &params,
-            Advice::Unsafe {
-                reason: "destroys root".into(),
-            },
-        );
-        match d {
-            Decision::Deny { message } => assert!(message.contains("destroys root")),
-            _ => panic!("expected Deny"),
         }
     }
 
@@ -1447,25 +1580,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_unsure_allows_once_no_rule() {
-        let params = ApprovalInput {
-            tool_name: "Bash".into(),
-            input: input(&[("command", "weird thing")]),
-            tool_use_id: None,
-            permission_suggestions: None,
-            blocked_path: None,
-        };
-        let d = ApprovalServer::decide(&params, Advice::Unsure);
-        match d {
-            Decision::Allow {
-                updated_permissions,
-                ..
-            } => assert!(updated_permissions.is_empty()),
-            _ => panic!("expected Allow"),
-        }
-    }
-
-    #[test]
     fn pre_classify_returns_none_for_bash() {
         assert!(pre_classify("Bash", Some("rm -rf /"), Some("/tmp")).is_none());
     }
@@ -1537,6 +1651,46 @@ mod tests {
     }
 
     #[test]
+    fn pre_classify_safe_through_symlink() {
+        // Reproduces the wow-ui-sim case: target uses one symlink prefix
+        // (e.g. `/home/user/Projects/foo`) and cwd uses the canonical path
+        // (e.g. `/syncthing/Projects/foo`). Lexical `starts_with` misses;
+        // canonicalize fallback must rescue.
+        let real_root = tempfile::tempdir().expect("tmp real");
+        let real_proj = real_root.path().join("proj");
+        std::fs::create_dir_all(real_proj.join("src")).unwrap();
+        let target = real_proj.join("src/lib.rs");
+        std::fs::write(&target, "").unwrap();
+
+        let link_root = tempfile::tempdir().expect("tmp link");
+        let link_proj = link_root.path().join("proj_link");
+        std::os::unix::fs::symlink(&real_proj, &link_proj).unwrap();
+
+        // Target via symlink, cwd via real path → lexical compare misses.
+        let target_via_link = link_proj.join("src/lib.rs");
+        let advice = pre_classify(
+            "Edit",
+            Some(target_via_link.to_str().unwrap()),
+            Some(real_proj.to_str().unwrap()),
+        );
+        assert!(
+            matches!(advice, Some(Advice::Safe { .. })),
+            "edit through symlink should be SAFE; got {advice:?}"
+        );
+
+        // And the inverse: target via real path, cwd via symlink.
+        let advice = pre_classify(
+            "Edit",
+            Some(target.to_str().unwrap()),
+            Some(link_proj.to_str().unwrap()),
+        );
+        assert!(
+            matches!(advice, Some(Advice::Safe { .. })),
+            "edit with symlinked cwd should be SAFE; got {advice:?}"
+        );
+    }
+
+    #[test]
     fn build_prompt_edit_frames_as_scope_escape() {
         let p = build_prompt("Edit", Some("/etc/passwd"), None, None);
         assert!(
@@ -1547,41 +1701,33 @@ mod tests {
             p.contains("scope escape") || p.contains("scope"),
             "edit prompt should reference scope; got: {p}"
         );
-        // The bash-style "modifies important state" framing must NOT
-        // appear in the edit prompt.
+        // The bash prompt's reversibility framing must NOT appear in the
+        // edit prompt.
         assert!(
-            !p.contains("modifies important state"),
+            !p.contains("REVERSIBILITY") && !p.contains("BLAST RADIUS"),
             "edit prompt must not reuse bash framing; got: {p}"
         );
     }
 
     #[test]
-    fn build_prompt_bash_unchanged_for_bash() {
-        let p = build_prompt("Bash", Some("ls"), None, None);
-        assert!(p.contains("modifies important state"), "got: {p}");
+    fn build_prompt_bash_uses_reversibility_taxonomy() {
+        let p = build_prompt("Bash", Some("git merge feature"), None, None);
+        // The bash prompt frames classification as reversibility / blast
+        // radius — not "modifies important state", which conflated routine
+        // writes with destructive ones and made every git command UNSAFE.
+        assert!(
+            p.contains("REVERSIBLE") || p.contains("reversible"),
+            "expected reversibility framing; got: {p}"
+        );
+        assert!(
+            p.contains("git merge"),
+            "expected example list to mention git merge as SAFE; got: {p}"
+        );
+        assert!(
+            p.contains("Err UNSURE — not UNSAFE"),
+            "expected explicit UNSAFE-fallback guard; got: {p}"
+        );
         assert!(!p.contains("OUTSIDE"), "got: {p}");
-    }
-
-    #[test]
-    fn build_prompt_omits_extras_when_absent() {
-        let with_extras = build_prompt("Bash", Some("ls -la"), None, None);
-        let legacy = {
-            let target_line = "Target: ls -la";
-            format!(
-                "An AI coding agent wants to use tool `Bash`.\n\
-                 {target_line}\n\
-                 \n\
-                 Decide whether this should be auto-allowed for the rest of the session.\n\
-                 Reply with EXACTLY one of, followed by a one-line reason:\n\
-                 \n\
-                 SAFE <reason>   — routine, read-only, or clearly harmless\n\
-                 UNSAFE <reason> — modifies important state, leaks secrets, or risky\n\
-                 UNSURE <reason> — ambiguous; let the human decide\n\
-                 \n\
-                 Err UNSURE for anything you're not confident about."
-            )
-        };
-        assert_eq!(with_extras, legacy);
     }
 
     #[test]
