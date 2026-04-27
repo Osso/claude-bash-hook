@@ -4,6 +4,7 @@
 //! Simple wrappers are config-driven, complex ones have special handling.
 
 mod bwrap;
+mod command_builtin;
 mod docker_exec;
 mod env;
 mod gcloud;
@@ -40,6 +41,7 @@ pub fn unwrap_command(cmd: &Command, config: &Config, depth: u32) -> Option<Unwr
         "scp" => return scp::unwrap(cmd),
         "rsync" => return rsync::unwrap(cmd),
         "env" => return env::unwrap(cmd),
+        "command" => return command_builtin::unwrap(cmd),
         "gcloud" => return gcloud::unwrap(cmd),
         "kubectl" => return kubectl::unwrap(cmd),
         "docker" => return docker_exec::unwrap(cmd),
