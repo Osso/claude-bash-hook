@@ -460,6 +460,9 @@ fn check_git_special(
     if cmd.name != "git" {
         return None;
     }
+    if let Some(result) = git::check_git_dangling_config(cmd) {
+        return Some(result);
+    }
     let subcmd = cmd.args.first().map(|s| s.as_str())?;
     match subcmd {
         "push" => git::check_git_push(cmd, config, initial_cwd),

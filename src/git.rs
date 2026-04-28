@@ -7,6 +7,50 @@ use std::process::Command as ProcessCommand;
 /// Protected branch names
 const PROTECTED_BRANCHES: &[&str] = &["master", "main"];
 
+/// Pre-command flags that consume the next argument
+const GIT_FLAGS_WITH_ARG: &[&str] = &["-c", "-C", "--git-dir", "--work-tree", "--namespace"];
+
+/// Detect `git -c key=value` invoked with no subcommand.
+/// Standalone, `-c` does nothing — usually indicates a malformed command or an
+/// attempt to slip a config override past the user without an actual git action.
+pub fn check_git_dangling_config(cmd: &Command) -> Option<PermissionResult> {
+    if cmd.name != "git" {
+        return None;
+    }
+
+    let mut had_c_flag = false;
+    let mut iter = cmd.args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "-c" || arg == "--config-env" {
+            had_c_flag = true;
+            iter.next();
+            continue;
+        }
+        if GIT_FLAGS_WITH_ARG.contains(&arg.as_str()) {
+            iter.next();
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        // Positional reached — that's a subcommand, this isn't dangling
+        return None;
+    }
+
+    if had_c_flag {
+        Some(PermissionResult {
+            permission: Permission::Deny,
+            reason: "git -c <config> with no subcommand".to_string(),
+            suggestion: Some(
+                "Add the git subcommand (e.g., 'git -c key=val commit ...') or drop -c"
+                    .to_string(),
+            ),
+        })
+    } else {
+        None
+    }
+}
+
 /// Check if a git checkout should be allowed
 pub fn check_git_checkout(cmd: &Command) -> Option<PermissionResult> {
     // Only handle git checkout
@@ -437,5 +481,53 @@ mod tests {
         let cmd = make_cmd(&["reset", "file.txt"]);
         let result = check_git_reset(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    // Dangling -c tests
+
+    #[test]
+    fn test_git_dangling_c_denied() {
+        let cmd = make_cmd(&["-c", "commit.gpgsign=false"]);
+        let result = check_git_dangling_config(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Deny);
+    }
+
+    #[test]
+    fn test_git_dangling_c_with_other_flags_denied() {
+        let cmd = make_cmd(&["-C", "/path", "-c", "commit.gpgsign=false", "--no-pager"]);
+        let result = check_git_dangling_config(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Deny);
+    }
+
+    #[test]
+    fn test_git_c_with_subcommand_passes() {
+        let cmd = make_cmd(&["-c", "commit.gpgsign=false", "commit", "-m", "x"]);
+        let result = check_git_dangling_config(&cmd);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_git_no_c_no_subcommand_passes() {
+        // No -c flag — let other rules handle bare `git` or `git --version`
+        let cmd = make_cmd(&["--version"]);
+        let result = check_git_dangling_config(&cmd);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_git_no_args_passes() {
+        let cmd = make_cmd(&[]);
+        let result = check_git_dangling_config(&cmd);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_non_git_returns_none() {
+        let cmd = Command {
+            name: "not-git".to_string(),
+            args: vec!["-c".to_string(), "x=y".to_string()],
+        };
+        let result = check_git_dangling_config(&cmd);
+        assert!(result.is_none());
     }
 }
