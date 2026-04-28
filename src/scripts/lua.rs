@@ -45,7 +45,21 @@ const DANGEROUS_PATTERNS: &[&str] = &[
     "ffi.C.",
 ];
 
-/// Safe Lua patterns - if io.open is used, check for read-only mode
+/// Extract the first string literal from io.open args.
+/// Returns the path if the first arg is a "..." or '...' literal.
+fn extract_path_literal(args: &str) -> Option<&str> {
+    let trimmed = args.trim_start();
+    let quote = trimmed.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let rest = &trimmed[1..];
+    let end = rest.find(quote)?;
+    Some(&rest[..end])
+}
+
+/// Safe Lua patterns - if io.open is used, check for read-only mode.
+/// Write mode to `/tmp/**` is treated as safe (scratch space).
 fn has_write_io_open(code: &str) -> bool {
     let code_lower = code.to_lowercase();
     let mut pos = 0;
@@ -59,14 +73,19 @@ fn has_write_io_open(code: &str) -> bool {
             // io.open(path, mode) - check mode argument
             // Write modes: "w", "a", "w+", "a+", "r+"
             // Read modes: "r", "rb" (or no mode = default "r")
-            if args.contains("\"w")
+            let is_write = args.contains("\"w")
                 || args.contains("'w")
                 || args.contains("\"a")
                 || args.contains("'a")
                 || args.contains("\"r+")
-                || args.contains("'r+")
-            {
-                return true;
+                || args.contains("'r+");
+
+            if is_write {
+                let path_in_tmp = extract_path_literal(args)
+                    .is_some_and(|p| p.starts_with("/tmp/"));
+                if !path_in_tmp {
+                    return true;
+                }
             }
         }
         pos = start;
@@ -235,10 +254,10 @@ mod tests {
     }
 
     #[test]
-    fn test_io_open_write_asks() {
+    fn test_io_open_write_outside_tmp_asks() {
         let cmd = make_cmd(&[
             "-e",
-            "local f = io.open('/tmp/test', 'w'); f:write('data'); f:close()",
+            "local f = io.open('/var/log/test', 'w'); f:write('data'); f:close()",
         ]);
         let result = check_lua_script(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Ask);
@@ -247,6 +266,26 @@ mod tests {
     #[test]
     fn test_io_open_append_asks() {
         let cmd = make_cmd(&["-e", "local f = io.open('/tmp/test', 'a'); f:write('data')"]);
+        let result = check_lua_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_io_open_write_tmp_allowed() {
+        let cmd = make_cmd(&[
+            "-e",
+            "local f = io.open('/tmp/scratch.txt', 'w'); f:write('data'); f:close()",
+        ]);
+        let result = check_lua_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_io_open_write_non_tmp_asks() {
+        let cmd = make_cmd(&[
+            "-e",
+            "local f = io.open('/etc/passwd', 'w'); f:write('data')",
+        ]);
         let result = check_lua_script(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Ask);
     }
