@@ -42,8 +42,7 @@ pub fn check_git_dangling_config(cmd: &Command) -> Option<PermissionResult> {
             permission: Permission::Deny,
             reason: "git -c <config> with no subcommand".to_string(),
             suggestion: Some(
-                "Add the git subcommand (e.g., 'git -c key=val commit ...') or drop -c"
-                    .to_string(),
+                "Add the git subcommand (e.g., 'git -c key=val commit ...') or drop -c".to_string(),
             ),
         })
     } else {
@@ -206,7 +205,7 @@ fn get_push_target_branch(cmd: &Command) -> Option<String> {
             skip_next = false;
             continue;
         }
-        if *arg == "-u" || *arg == "--set-upstream" || *arg == "-o" || *arg == "--push-option" {
+        if *arg == "-o" || *arg == "--push-option" {
             skip_next = true;
             continue;
         }
@@ -368,6 +367,21 @@ mod tests {
         let cmd = make_cmd(&["push", "origin", "HEAD:main"]);
         let result = check_git_push(&cmd, &default_config(), None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_push_set_upstream_refspec_to_feature_allows() {
+        // -u is a boolean flag; must not swallow the remote argument
+        let cmd = make_cmd(&["push", "-u", "origin", "feature:feature"]);
+        let result = check_git_push(&cmd, &default_config(), None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_push_set_upstream_long_refspec_to_feature_allows() {
+        let cmd = make_cmd(&["push", "--set-upstream", "origin", "feature:feature"]);
+        let result = check_git_push(&cmd, &default_config(), None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
