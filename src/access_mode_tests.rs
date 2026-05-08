@@ -331,18 +331,22 @@ fn test_build_codex_hook_output_deny_shape_matches_codex_schema() {
     let output =
         build_codex_hook_output("deny", "git push origin master: blocks force pushes", None)
             .expect("deny should build a codex output");
-    assert_eq!(output.hook_output.event_name, "PreToolUse");
-    assert_eq!(output.hook_output.decision, "deny");
+    let value = serde_json::to_value(output).expect("serializable");
+    assert_eq!(value["decision"], "block");
     assert_eq!(
-        output.hook_output.reason,
+        value["reason"],
         "git push origin master: blocks force pushes"
     );
-    assert!(output.hook_output.updated_input.is_none());
+    assert!(value.get("updatedInput").is_none());
 }
 
 #[test]
 fn test_build_codex_hook_output_returns_none_for_bare_allow() {
-    assert!(build_codex_hook_output("allow", "safe command", None).is_none());
+    let output = build_codex_hook_output("allow", "safe command", None)
+        .expect("allow should build for codex");
+    let value = serde_json::to_value(output).expect("serializable");
+    assert_eq!(value["decision"], "approve");
+    assert!(value.get("reason").is_none());
 }
 
 #[test]
@@ -354,24 +358,28 @@ fn test_build_codex_hook_output_returns_none_for_ask() {
 fn test_build_codex_hook_output_substitutes_reason_when_blank() {
     let output = build_codex_hook_output("deny", "   ", None).expect("deny should build");
     assert!(
-        !output.hook_output.reason.trim().is_empty(),
-        "codex requires non-empty permissionDecisionReason on deny"
+        !serde_json::to_value(output)
+            .expect("serializable")
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .is_empty(),
+        "codex requires non-empty reason on deny"
     );
 }
 
 #[test]
-fn test_build_codex_hook_output_emits_allow_when_updated_input_present() {
+fn test_build_codex_hook_output_drops_updated_input_on_allow() {
     let output = build_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
     )
-    .expect("allow with updatedInput should build a codex output");
-    assert_eq!(output.hook_output.decision, "allow");
-    assert_eq!(
-        output.hook_output.updated_input,
-        Some(json!({ "command": "rtk git status" }))
-    );
+    .expect("allow should build a codex output");
+    let value = serde_json::to_value(output).expect("serializable");
+    assert_eq!(value["decision"], "approve");
+    assert!(value.get("updatedInput").is_none());
 }
 
 #[test]
@@ -379,35 +387,29 @@ fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
     let json = serialize_codex_hook_output("deny", "rm -rf /: filesystem nuke", None)
         .expect("deny should serialize");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
-    let hso = &value["hookSpecificOutput"];
-    assert_eq!(hso["hookEventName"], "PreToolUse");
-    assert_eq!(hso["permissionDecision"], "deny");
-    assert_eq!(hso["permissionDecisionReason"], "rm -rf /: filesystem nuke");
-    // additionalContext is still rejected by codex; never emit it.
-    assert!(hso.get("updatedInput").is_none());
-    assert!(hso.get("additionalContext").is_none());
-    // Top-level legacy fields must also not appear for codex pre-tool-use.
-    assert!(value.get("decision").is_none());
-    assert!(value.get("reason").is_none());
+    assert_eq!(value["decision"], "block");
+    assert_eq!(value["reason"], "rm -rf /: filesystem nuke");
+    assert!(value.get("updatedInput").is_none());
 }
 
 #[test]
-fn test_serialize_codex_hook_output_allow_with_rewrite_carries_updated_input() {
+fn test_serialize_codex_hook_output_allow_with_rewrite_omits_updated_input() {
     let json = serialize_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
     )
-    .expect("allow with updatedInput should serialize");
+    .expect("allow should serialize");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
-    let hso = &value["hookSpecificOutput"];
-    assert_eq!(hso["permissionDecision"], "allow");
-    assert_eq!(hso["updatedInput"]["command"], "rtk git status");
-    assert!(hso.get("additionalContext").is_none());
+    assert_eq!(value["decision"], "approve");
+    assert!(value.get("updatedInput").is_none());
 }
 
 #[test]
 fn test_serialize_codex_hook_output_returns_none_for_bare_allow_or_ask() {
-    assert!(serialize_codex_hook_output("allow", "safe", None).is_none());
+    let json = serialize_codex_hook_output("allow", "safe", None)
+        .expect("allow should serialize for codex");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
+    assert_eq!(value["decision"], "approve");
     assert!(serialize_codex_hook_output("ask", "needs review", None).is_none());
 }

@@ -172,28 +172,15 @@ struct HookSpecificOutput {
     updated_input: Option<serde_json::Value>,
 }
 
-/// Codex pre-tool-use accepts a strict subset of the Claude schema:
-/// `permissionDecision: allow|deny`, optional `updatedInput`, and
-/// `permissionDecisionReason` (required on deny). `ask` and `additionalContext`
-/// are still rejected by codex's parser, so we never emit them — and we only
-/// emit `allow` when there's an `updatedInput` rewrite worth carrying, since
-/// bare allow is a no-op against codex's own permission flow.
+/// Codex parses the `PreToolUse` legacy shape:
+/// top-level `decision: approve|block` plus optional `reason`.
+/// `updatedInput` is not part of the accepted wire shape, so the Codex path
+/// must drop rewrites instead of serializing them.
 #[derive(Debug, Serialize)]
 struct CodexHookOutput {
-    #[serde(rename = "hookSpecificOutput")]
-    hook_output: CodexHookSpecificOutput,
-}
-
-#[derive(Debug, Serialize)]
-struct CodexHookSpecificOutput {
-    #[serde(rename = "hookEventName")]
-    event_name: &'static str,
-    #[serde(rename = "permissionDecision")]
-    decision: &'static str,
-    #[serde(rename = "permissionDecisionReason")]
-    reason: String,
-    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    updated_input: Option<serde_json::Value>,
+    decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 /// Check if a Write tool path should be blocked
@@ -231,7 +218,7 @@ fn serialize_hook_output(
 fn build_codex_hook_output(
     decision: &str,
     reason: &str,
-    updated_input: Option<serde_json::Value>,
+    _updated_input: Option<serde_json::Value>,
 ) -> Option<CodexHookOutput> {
     match decision {
         "deny" => {
@@ -242,21 +229,13 @@ fn build_codex_hook_output(
                 reason.to_string()
             };
             Some(CodexHookOutput {
-                hook_output: CodexHookSpecificOutput {
-                    event_name: "PreToolUse",
-                    decision: "deny",
-                    reason,
-                    updated_input: None,
-                },
+                decision: "block".to_string(),
+                reason: Some(reason),
             })
         }
-        "allow" if updated_input.is_some() => Some(CodexHookOutput {
-            hook_output: CodexHookSpecificOutput {
-                event_name: "PreToolUse",
-                decision: "allow",
-                reason: reason.to_string(),
-                updated_input,
-            },
+        "allow" => Some(CodexHookOutput {
+            decision: "approve".to_string(),
+            reason: None,
         }),
         _ => None,
     }
