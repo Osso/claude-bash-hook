@@ -144,6 +144,13 @@ permission = "allow"
 main_thread_permission = "allow"
 reason = "glab read-only and safe operations"
 
+# Merging PRs is irreversible - require explicit approval.
+[[rules]]
+commands = ["gh pr merge"]
+permission = "ask"
+main_thread_permission = "ask"
+reason = "merging a PR is irreversible — require explicit approval"
+
 # raw api - deny (use specific subcommands instead)
 [[rules]]
 commands = ["gitlab api", "gh api"]
