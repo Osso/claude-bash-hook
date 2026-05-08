@@ -17,11 +17,21 @@ pub fn handle_non_bash_tool(hook_input: &HookInput, config: &Config, is_subagent
     if hook_input.tool_name == "Read" {
         return handle_read(hook_input, config, is_codex);
     }
-    if hook_input.tool_name == "mcp__regex-replace__regex_replace" {
+    if is_regex_replace_tool(&hook_input.tool_name) {
         handle_regex_replace(hook_input, is_subagent, is_codex);
         return true;
     }
     false
+}
+
+fn is_regex_replace_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "mcp__regex-replace__regex_replace"
+            | "mcp__regex_replace__regex_replace"
+            | "regex-replace.regex_replace"
+            | "regex_replace.regex_replace"
+    )
 }
 
 fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool, is_codex: bool) {
@@ -208,6 +218,13 @@ mod tests {
     #[test]
     fn test_handle_non_bash_tool_handles_regex_replace() {
         let mut input = hook_input("mcp__regex-replace__regex_replace");
+        input.tool_input.dry_run = Some(true);
+        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_handles_codex_regex_replace_name() {
+        let mut input = hook_input("regex-replace.regex_replace");
         input.tool_input.dry_run = Some(true);
         assert!(handle_non_bash_tool(&input, &Config::default(), false));
     }
