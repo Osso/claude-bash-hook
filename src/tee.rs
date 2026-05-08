@@ -6,6 +6,8 @@ use crate::analyzer::Command;
 use crate::config::{Permission, PermissionResult};
 use std::process::Command as ProcessCommand;
 
+const REALPATH: &str = "/usr/bin/realpath";
+
 /// Check if a tee command should be auto-allowed
 /// Allows writing to files under /tmp/
 pub fn check_tee(cmd: &Command, _initial_cwd: Option<&str>) -> Option<PermissionResult> {
@@ -95,7 +97,7 @@ fn is_under_tmp(resolved: &str) -> bool {
 
 /// Resolve a path using realpath
 fn resolve_path(path: &str) -> Option<String> {
-    let output = ProcessCommand::new("realpath")
+    let output = ProcessCommand::new(REALPATH)
         .arg("-m") // don't require path to exist
         .arg("--")
         .arg(path)

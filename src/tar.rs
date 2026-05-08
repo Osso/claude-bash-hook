@@ -6,6 +6,7 @@ use crate::analyzer::Command;
 use crate::config::{Permission, PermissionResult};
 use std::process::Command as ProcessCommand;
 
+const REALPATH: &str = "/usr/bin/realpath";
 const SAFE_PREFIX: &str = "/tmp/claude/";
 
 /// Check if a tar command should be auto-allowed
@@ -169,7 +170,7 @@ fn is_safe_tmp_claude_path(path: &str) -> bool {
 
 /// Resolve a path using realpath
 fn resolve_path(path: &str) -> Option<String> {
-    let output = ProcessCommand::new("realpath")
+    let output = ProcessCommand::new(REALPATH)
         .arg("-m")
         .arg("--")
         .arg(path)

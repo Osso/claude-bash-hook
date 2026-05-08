@@ -7,6 +7,8 @@ use crate::config::{Config, Permission, PermissionResult};
 use std::path::Path;
 use std::process::Command as ProcessCommand;
 
+const REALPATH: &str = "/usr/bin/realpath";
+
 /// Check if an rm command should be auto-allowed
 /// Allows deletion of files under /tmp/ or the project directory (initial_cwd)
 /// Uses virtual_cwd to resolve relative paths (from cd commands in pipeline)
@@ -128,7 +130,7 @@ fn is_under_allowed_dir(resolved: &str, initial_cwd: Option<&str>) -> bool {
 
 /// Resolve a path using realpath
 fn resolve_path(path: &str) -> Option<String> {
-    let output = ProcessCommand::new("realpath")
+    let output = ProcessCommand::new(REALPATH)
         .arg("-m") // don't require path to exist
         .arg("--")
         .arg(path)
