@@ -2,6 +2,7 @@
 
 use crate::analyzer::Command;
 use crate::config::{Permission, PermissionResult};
+use crate::sql::check_piped_query;
 use regex::Regex;
 
 /// Safe modules for __import__() calls. Anything not listed here triggers "ask".
@@ -89,8 +90,7 @@ const DANGEROUS_PATTERNS: &[&str] = &[
     "requests.",
     "httpx.",
     "aiohttp.",
-    // Database
-    "sqlite3.connect",
+    // Database (sqlite3.connect is checked separately — allowed if all execute() calls are read-only)
     "psycopg",
     "pymysql",
     "mysql.connector",
@@ -202,6 +202,31 @@ fn is_readonly_python(code: &str) -> bool {
         return false;
     }
 
+    // sqlite3 is allowed only if all execute*() calls run read-only SQL
+    if code.contains("sqlite3") && !sqlite_calls_are_readonly(code) {
+        return false;
+    }
+
+    true
+}
+
+/// Verify every .execute(), .executemany(), .executescript() call passes a
+/// literal read-only SQL string as its first argument. Unrecognized callers or
+/// non-literal queries fail closed.
+fn sqlite_calls_are_readonly(code: &str) -> bool {
+    for method in [".execute(", ".executemany(", ".executescript("] {
+        let mut pos = 0;
+        while let Some(idx) = code[pos..].find(method) {
+            let start = pos + idx + method.len();
+            let Some(query) = extract_string_arg(&code[start..]) else {
+                return false;
+            };
+            if check_piped_query(&query).permission != Permission::Allow {
+                return false;
+            }
+            pos = start;
+        }
+    }
     true
 }
 
@@ -689,6 +714,92 @@ mod tests {
         let cmd = make_cmd(
             "python3",
             &["-c", "compile('print(1)', '<string>', 'exec')"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_sqlite3_select_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "import sqlite3; c=sqlite3.connect('/tmp/db.sqlite'); print(c.execute('SELECT 1 FROM t WHERE x=?',(1,)).fetchone())",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_sqlite3_walk_and_select_allowed() {
+        // Mirrors the real-world script: os.walk + read open() + sqlite3 SELECTs
+        let code = "import hashlib, os, sqlite3; \
+root='/tmp/x'; \
+res=sqlite3.connect('/tmp/a.sqlite'); \
+local=sqlite3.connect('/tmp/b.sqlite'); \
+out=[]
+for dirpath,_,files in os.walk(root):
+    for name in files:
+        p=os.path.join(dirpath,name); rel=os.path.relpath(p,root)
+        if local.execute('select 1 from t where lower_path=?',(rel.lower(),)).fetchone(): continue
+        h=hashlib.md5(open(p,'rb').read()).digest(); rows=res.execute('select fdid from resolution where content_key=? limit 1',(h,)).fetchall()
+        if not rows: out.append(rel)
+print('\\n'.join(out))";
+        let cmd = make_cmd("python3", &["-c", code]);
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_sqlite3_insert_asks() {
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "import sqlite3; c=sqlite3.connect('/tmp/db.sqlite'); c.execute('INSERT INTO t VALUES (1)')",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_sqlite3_executemany_update_asks() {
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "import sqlite3; c=sqlite3.connect(':memory:'); c.executemany('UPDATE t SET x=? WHERE id=?', rows)",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_sqlite3_executescript_mixed_asks() {
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "import sqlite3; sqlite3.connect(':memory:').executescript('SELECT 1; DROP TABLE t;')",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_sqlite3_execute_variable_query_asks() {
+        // Non-literal query — can't verify it's read-only, fail closed
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "import sqlite3, sys; sqlite3.connect(':memory:').execute(sys.argv[1])",
+            ],
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
