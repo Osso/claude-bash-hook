@@ -29,7 +29,7 @@ tempfile = "3"
 
 [profile.release]
 lto = false
-incremental = true
+
 strip = true
 
 [[bin]]
