@@ -18,7 +18,9 @@ default = "passthrough"
 
 # File paths allowed for Write/Edit on main thread (even when main_thread_default = "deny")
 # Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
-# main_thread_write_allow = ["~/.claude/rules/99-calibration.md"]
+# In-scope edits are normal worker behavior, so current worktree paths and
+# `/tmp` should be treated as auto-allow by the approval prompt itself.
+# main_thread_write_allow = ["~/.claude/rules/99-calibration.md", "/tmp/*"]
 
 # File paths that always prompt instead of auto-allowing — applies to
 # Write/Edit/Read tools and to rm commands. Same glob syntax as above.
@@ -422,4 +424,3 @@ message = "Use the Grep tool instead of grep/rg"
 [[suggestions]]
 command = "locate"
 message = "Use the Glob tool or 'fd' for file search"
-
