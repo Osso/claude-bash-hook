@@ -12,6 +12,7 @@ mod docker;
 mod git;
 mod host_advice;
 mod kill;
+mod magick;
 mod nushell;
 mod output;
 mod redis;

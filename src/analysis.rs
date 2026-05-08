@@ -7,6 +7,7 @@ use crate::curl;
 use crate::docker;
 use crate::git;
 use crate::kill;
+use crate::magick;
 use crate::nushell;
 use crate::redis;
 use crate::rm;
@@ -212,7 +213,8 @@ fn check_single_command(
     if let Some(result) = check_git_special(cmd, config, initial_cwd) {
         return result;
     }
-    if let Some(result) = check_filesystem(cmd, config, virtual_cwd, initial_cwd, has_uncertain_flow)
+    if let Some(result) =
+        check_filesystem(cmd, config, virtual_cwd, initial_cwd, has_uncertain_flow)
     {
         return result;
     }
@@ -505,6 +507,7 @@ fn check_misc(
     initial_cwd: Option<&str>,
 ) -> Option<PermissionResult> {
     allow_magick_info(cmd)
+        .or_else(|| magick::check_magick(cmd))
         .or_else(|| allow_curl(cmd, config, ctx))
         .or_else(|| allow_help_request(cmd))
         .or_else(|| allow_version_request(cmd))
