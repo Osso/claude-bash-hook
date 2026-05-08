@@ -81,8 +81,8 @@ fn has_write_io_open(code: &str) -> bool {
                 || args.contains("'r+");
 
             if is_write {
-                let path_in_tmp = extract_path_literal(args)
-                    .is_some_and(|p| p.starts_with("/tmp/"));
+                let path_in_tmp =
+                    extract_path_literal(args).is_some_and(|p| p.starts_with("/tmp/"));
                 if !path_in_tmp {
                     return true;
                 }
