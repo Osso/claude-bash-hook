@@ -11,7 +11,7 @@
 //! Flow:
 //!   1. `pre_classify` short-circuits file-edit tools (Edit/Write/MultiEdit/
 //!      NotebookEdit) when the target lives inside the agent's working scope
-//!      (cwd / worktree / `/tmp`). Editing inside scope is the worker's job,
+//!      (cwd / worktree / `/tmp`). In-scope editing is normal worker behavior,
 //!      so it is classified SAFE without spending a Codex call.
 //!   2. Outside-scope edits and Bash invocations consult Codex via tool-
 //!      specific prompts (`build_prompt_edit` frames the question as scope-
@@ -40,7 +40,9 @@ const CODEX_MODEL: &str = "gpt-5.3-codex-spark";
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ApprovalInput {
-    #[schemars(description = "Name of the tool Claude wants to use (Bash, Edit, Write, Read, ...)")]
+    #[schemars(
+        description = "Name of the tool Claude wants to use (Bash, Edit, Write, Read, ...)"
+    )]
     tool_name: String,
     #[schemars(description = "Arguments Claude passed to the tool")]
     input: HashMap<String, serde_json::Value>,
@@ -53,6 +55,9 @@ struct ApprovalInput {
     #[serde(default)]
     #[schemars(description = "Path that triggered a deny rule, if any")]
     blocked_path: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Working directory for the current Claude session, if available")]
+    cwd: Option<String>,
 }
 
 /// A permission rule persisted on "always allow".
@@ -99,7 +104,10 @@ enum Advice {
 /// Short, human-readable target string for the prompt and logs.
 fn rule_target(tool_name: &str, input: &HashMap<String, serde_json::Value>) -> Option<String> {
     match tool_name {
-        "Bash" => input.get("command").and_then(|v| v.as_str()).map(String::from),
+        "Bash" => input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Read" => input
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -111,10 +119,7 @@ fn rule_target(tool_name: &str, input: &HashMap<String, serde_json::Value>) -> O
 /// Returns true when `tool_name` is one of the file-mutating tools whose
 /// "is this safe?" question collapses to "is this an in-scope edit?".
 fn is_file_edit_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
-    )
+    matches!(tool_name, "Edit" | "Write" | "MultiEdit" | "NotebookEdit")
 }
 
 /// Normalize `path` to an absolute path with `.` and `..` components
@@ -204,14 +209,10 @@ fn is_in_agent_scope(path: &str, cwd: Option<&str>) -> bool {
 
 /// Pre-classification before consulting Codex. Returns `Some(Safe)` for
 /// file-edit tools whose target sits inside the agent's working scope —
-/// editing files is the worker's job, so it shouldn't be billed to the
-/// LLM-judgement budget. Bash and out-of-scope edits return `None` and
-/// flow on to Codex.
-fn pre_classify(
-    tool_name: &str,
-    target: Option<&str>,
-    cwd: Option<&str>,
-) -> Option<Advice> {
+/// editing files in the worktree or `/tmp` is the worker's job, so it
+/// should bypass LLM judgment entirely. Bash and out-of-scope edits
+/// return `None` and flow on to Codex.
+fn pre_classify(tool_name: &str, target: Option<&str>, cwd: Option<&str>) -> Option<Advice> {
     if !is_file_edit_tool(tool_name) {
         return None;
     }
@@ -330,13 +331,13 @@ fn build_prompt_edit(
     append_extras(&mut extras, suggestions, blocked_path);
 
     format!(
-        "An AI coding agent wants to use tool `{tool_name}` to modify a file OUTSIDE \
-         its working scope (cwd / worktree / `/tmp`).\n\
+        "An AI coding agent wants to use tool `{tool_name}` to modify a file.\n\
          {target_line}{extras}\n\
          \n\
-         Editing files is the agent's normal job; the question is whether THIS path \
-         is a deliberate, expected target — not whether file edits are risky in \
-         general.\n\
+         Editing files is the agent's normal job. In-scope edits like source files, \
+         manifests such as `Cargo.toml`, and scratch files under the worktree or \
+         `/tmp` are already auto-allowed. This prompt only asks whether THIS path \
+         is a deliberate, expected target OUTSIDE that scope.\n\
          Reply with EXACTLY one of, followed by a one-line reason:\n\
          \n\
          SAFE <reason>   — explicitly intended target outside scope (e.g. shared \
@@ -380,26 +381,14 @@ async fn ask_codex_subprocess(
     target: Option<&str>,
     suggestions: Option<&[serde_json::Value]>,
     blocked_path: Option<&str>,
+    cwd: Option<&str>,
 ) -> Option<Advice> {
     use std::process::Stdio;
     use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
 
     let exe = std::env::current_exe().ok()?;
-
-    let input_field = match tool_name {
-        "Bash" => serde_json::json!({"command": target.unwrap_or("")}),
-        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Read" => {
-            serde_json::json!({"file_path": target.unwrap_or("")})
-        }
-        _ => serde_json::Value::Object(serde_json::Map::new()),
-    };
-    let payload = serde_json::json!({
-        "tool_name": tool_name,
-        "input": input_field,
-        "permission_suggestions": suggestions,
-        "blocked_path": blocked_path,
-    });
+    let payload = build_decide_payload(tool_name, target, suggestions, blocked_path, cwd);
     let payload_str = serde_json::to_string(&payload).ok()?;
 
     let mut child = Command::new(&exe)
@@ -424,6 +413,30 @@ async fn ask_codex_subprocess(
         return None;
     }
     parse_decide_output(&output.stdout)
+}
+
+fn build_decide_payload(
+    tool_name: &str,
+    target: Option<&str>,
+    suggestions: Option<&[serde_json::Value]>,
+    blocked_path: Option<&str>,
+    cwd: Option<&str>,
+) -> serde_json::Value {
+    let input_field = match tool_name {
+        "Bash" => serde_json::json!({"command": target.unwrap_or("")}),
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "Read" => {
+            serde_json::json!({"file_path": target.unwrap_or("")})
+        }
+        _ => serde_json::Value::Object(serde_json::Map::new()),
+    };
+
+    serde_json::json!({
+        "tool_name": tool_name,
+        "input": input_field,
+        "cwd": cwd,
+        "permission_suggestions": suggestions,
+        "blocked_path": blocked_path,
+    })
 }
 
 /// Parse the JSON line emitted by `run_decide_cli`: `{"verdict":"safe|unsafe|unsure","reason":"…"}`.
@@ -619,7 +632,10 @@ mod config_writer {
     /// Wrapper using the default user config path.
     pub fn append_bash_allow_rule(command: &str, reason: &str) -> io::Result<()> {
         let path = config_path().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "HOME not set; cannot locate config")
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "HOME not set; cannot locate config",
+            )
         })?;
         append_bash_allow_rule_at(&path, command, reason)
     }
@@ -700,11 +716,12 @@ mod elicit {
         }
     }
 
-    pub fn parse_result(action: ElicitationAction, content: Option<&serde_json::Value>) -> Option<UserChoice> {
+    pub fn parse_result(
+        action: ElicitationAction,
+        content: Option<&serde_json::Value>,
+    ) -> Option<UserChoice> {
         match action {
-            ElicitationAction::Decline | ElicitationAction::Cancel => {
-                Some(UserChoice::AllowOnce)
-            }
+            ElicitationAction::Decline | ElicitationAction::Cancel => Some(UserChoice::AllowOnce),
             ElicitationAction::Accept => {
                 let choice = content
                     .and_then(|v| v.get(CHOICE_KEY))
@@ -869,7 +886,9 @@ impl ApprovalServer {
                 params.tool_name, target
             );
             mocked
-        } else if let Some(pre) = pre_classify(&params.tool_name, target.as_deref(), None) {
+        } else if let Some(pre) =
+            pre_classify(&params.tool_name, target.as_deref(), params.cwd.as_deref())
+        {
             info!(
                 "pre-classified SAFE (in-scope edit) tool={} target={:?}",
                 params.tool_name, target
@@ -881,6 +900,7 @@ impl ApprovalServer {
                 target.as_deref(),
                 params.permission_suggestions.as_deref(),
                 params.blocked_path.as_deref(),
+                params.cwd.as_deref(),
             )
             .await
             .unwrap_or_else(|| {
@@ -1181,10 +1201,7 @@ async fn run_decide_cli() -> Result<()> {
         info!("decide cwd={cwd}");
     }
 
-    info!(
-        "decide tool={} target={:?}",
-        tool_name, target
-    );
+    info!("decide tool={} target={:?}", tool_name, target);
 
     let advice = if let Some(mocked) = mock_advice_from_env() {
         info!(
@@ -1192,9 +1209,7 @@ async fn run_decide_cli() -> Result<()> {
             tool_name, target
         );
         mocked
-    } else if let Some(pre) =
-        pre_classify(tool_name, target.as_deref(), parsed.cwd.as_deref())
-    {
+    } else if let Some(pre) = pre_classify(tool_name, target.as_deref(), parsed.cwd.as_deref()) {
         info!(
             "pre-classified SAFE (in-scope edit) tool={} target={:?} cwd={:?}",
             tool_name, target, parsed.cwd
@@ -1216,15 +1231,24 @@ async fn run_decide_cli() -> Result<()> {
 
     let verdict = match advice {
         Advice::Safe { reason } => {
-            info!("decide tool={} target={:?} verdict=safe reason={}", tool_name, target, reason);
+            info!(
+                "decide tool={} target={:?} verdict=safe reason={}",
+                tool_name, target, reason
+            );
             CliVerdict::Safe { reason }
         }
         Advice::Unsafe { reason } => {
-            info!("decide tool={} target={:?} verdict=unsafe reason={}", tool_name, target, reason);
+            info!(
+                "decide tool={} target={:?} verdict=unsafe reason={}",
+                tool_name, target, reason
+            );
             CliVerdict::Unsafe { reason }
         }
         Advice::Unsure => {
-            info!("decide tool={} target={:?} verdict=unsure", tool_name, target);
+            info!(
+                "decide tool={} target={:?} verdict=unsure",
+                tool_name, target
+            );
             CliVerdict::Unsure
         }
     };
@@ -1291,7 +1315,10 @@ mod tests {
 
     #[test]
     fn parse_advice_unsure() {
-        assert!(matches!(parse_advice("UNSURE depends on cwd"), Advice::Unsure));
+        assert!(matches!(
+            parse_advice("UNSURE depends on cwd"),
+            Advice::Unsure
+        ));
     }
 
     #[test]
@@ -1399,6 +1426,7 @@ mod tests {
             tool_use_id: None,
             permission_suggestions: None,
             blocked_path: None,
+            cwd: None,
         };
         let d = ApprovalServer::decide_safe(&params, "read-only".into());
         match d {
@@ -1606,12 +1634,18 @@ mod tests {
     }
 
     #[test]
-    fn pre_classify_none_when_path_outside_cwd_and_tmp() {
+    fn pre_classify_safe_for_manifest_under_cwd() {
         let advice = pre_classify(
-            "Edit",
-            Some("/etc/passwd"),
+            "Write",
+            Some("/home/user/project/Cargo.toml"),
             Some("/home/user/project"),
         );
+        assert!(matches!(advice, Some(Advice::Safe { .. })));
+    }
+
+    #[test]
+    fn pre_classify_none_when_path_outside_cwd_and_tmp() {
+        let advice = pre_classify("Edit", Some("/etc/passwd"), Some("/home/user/project"));
         assert!(advice.is_none());
     }
 
@@ -1778,6 +1812,35 @@ mod tests {
     }
 
     #[test]
+    fn approval_input_parses_cwd() {
+        let json = r#"{
+            "tool_name": "Edit",
+            "input": {"file_path": "/tmp/test.rs"},
+            "cwd": "/syncthing/Sync/Projects/foo",
+            "permission_suggestions": [],
+            "blocked_path": null
+        }"#;
+        let input: ApprovalInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.cwd.as_deref(), Some("/syncthing/Sync/Projects/foo"));
+    }
+
+    #[test]
+    fn build_decide_payload_includes_cwd() {
+        let payload = build_decide_payload(
+            "Edit",
+            Some("/syncthing/Sync/Projects/foo/src/lib.rs"),
+            None,
+            Some("/syncthing/Sync/Projects/foo/src/lib.rs"),
+            Some("/syncthing/Sync/Projects/foo"),
+        );
+        assert_eq!(payload["cwd"], "/syncthing/Sync/Projects/foo");
+        assert_eq!(
+            payload["input"]["file_path"],
+            "/syncthing/Sync/Projects/foo/src/lib.rs"
+        );
+    }
+
+    #[test]
     fn decide_input_parses_full_payload() {
         let json = r#"{
             "tool_name": "Bash",
@@ -1794,10 +1857,7 @@ mod tests {
         );
         assert_eq!(d.cwd.as_deref(), Some("/home/osso/Repos/ask"));
         assert!(d.permission_suggestions.is_some());
-        assert_eq!(
-            d.permission_suggestions.as_ref().unwrap().len(),
-            1
-        );
+        assert_eq!(d.permission_suggestions.as_ref().unwrap().len(), 1);
         assert_eq!(d.blocked_path.as_deref(), Some("/etc/passwd"));
     }
 
@@ -1840,7 +1900,10 @@ mod tests {
     #[test]
     fn parse_command_list_plain_json() {
         let result = parse_command_list(r#"["git status", "git log"]"#);
-        assert_eq!(result, Some(vec!["git status".to_string(), "git log".to_string()]));
+        assert_eq!(
+            result,
+            Some(vec!["git status".to_string(), "git log".to_string()])
+        );
     }
 
     #[test]
@@ -1875,7 +1938,8 @@ mod tests {
             reason: Some("user: approve git reads".to_string()),
             error: None,
         };
-        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
         assert_eq!(json["rule_written"], true);
         assert_eq!(json["commands"][0], "git status");
         assert_eq!(json["commands"][1], "git log");
@@ -1891,9 +1955,13 @@ mod tests {
             reason: None,
             error: Some("persist-rule v1 only supports tool_name=Bash".to_string()),
         };
-        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
         assert_eq!(json["rule_written"], false);
-        assert_eq!(json["error"], "persist-rule v1 only supports tool_name=Bash");
+        assert_eq!(
+            json["error"],
+            "persist-rule v1 only supports tool_name=Bash"
+        );
         assert!(json.get("commands").is_none() || json["commands"].is_null());
         assert!(json.get("reason").is_none() || json["reason"].is_null());
     }
