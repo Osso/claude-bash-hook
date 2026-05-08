@@ -2,32 +2,32 @@
 
 use crate::config::{Config, Permission, PermissionResult};
 use crate::{
-    HookInput, apply_access_mode_result, check_write_path, edits_allowed, output_decision,
-    permission_name,
+    HookInput, apply_access_mode_result, check_write_path, edits_allowed, is_codex_runtime,
+    output_decision, permission_name,
 };
 
 /// Handle Write, Edit, Read, and regex-replace tools.
 /// Returns true if the tool was handled (caller should return), false otherwise.
 pub fn handle_non_bash_tool(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
+    let is_codex = is_codex_runtime(hook_input);
     if hook_input.tool_name == "Write" || hook_input.tool_name == "Edit" {
-        handle_write_edit(hook_input, config, is_subagent);
+        handle_write_edit(hook_input, config, is_subagent, is_codex);
         return true;
     }
     if hook_input.tool_name == "Read" {
-        return handle_read(hook_input, config);
+        return handle_read(hook_input, config, is_codex);
     }
     if hook_input.tool_name == "mcp__regex-replace__regex_replace" {
-        handle_regex_replace(hook_input, is_subagent);
+        handle_regex_replace(hook_input, is_subagent, is_codex);
         return true;
     }
     false
 }
 
-fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool) {
-    if check_main_thread_block(hook_input, config, is_subagent) {
+fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool, is_codex: bool) {
+    if check_main_thread_block(hook_input, config, is_subagent, is_codex) {
         return;
     }
-    let is_codex = hook_input.is_codex();
     if let Some(ref path) = hook_input.tool_input.file_path {
         if let Some(result) = check_write_path(path) {
             output_decision(&result.0, &result.1, None, is_codex);
@@ -76,11 +76,10 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool)
 /// Handle Read tool. Emits a decision when the path is on the ask-list or
 /// auto-allow list; otherwise returns true without output so Claude Code's
 /// default applies. `ask_paths` wins on overlap.
-fn handle_read(hook_input: &HookInput, config: &Config) -> bool {
+fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool {
     let Some(ref path) = hook_input.tool_input.file_path else {
         return true;
     };
-    let is_codex = hook_input.is_codex();
     if config.is_ask_path(path) {
         output_decision(
             "ask",
@@ -101,7 +100,12 @@ fn handle_read(hook_input: &HookInput, config: &Config) -> bool {
     true
 }
 
-fn check_main_thread_block(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
+fn check_main_thread_block(
+    hook_input: &HookInput,
+    config: &Config,
+    is_subagent: bool,
+    is_codex: bool,
+) -> bool {
     let is_disabled = !is_subagent
         && matches!(
             config.main_thread_default.as_deref(),
@@ -122,12 +126,12 @@ fn check_main_thread_block(hook_input: &HookInput, config: &Config, is_subagent:
         "deny",
         "main thread file writes disabled. Use Task() to delegate to subagents",
         None,
-        hook_input.is_codex(),
+        is_codex,
     );
     true
 }
 
-fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool) {
+fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool, is_codex: bool) {
     let edit_mode = edits_allowed(hook_input.permission_mode.as_deref());
     let is_dry_run = hook_input.tool_input.dry_run.unwrap_or(false);
     let reason = regex_replace_reason(edit_mode, is_dry_run, is_subagent);
@@ -148,7 +152,7 @@ fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool) {
         permission_name(result.permission),
         &result.reason,
         None,
-        hook_input.is_codex(),
+        is_codex,
     );
 }
 
@@ -220,7 +224,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
         let config = config_with_main_thread_default("deny");
-        assert!(check_main_thread_block(&input, &config, false));
+        assert!(check_main_thread_block(&input, &config, false, false));
     }
 
     #[test]
@@ -234,7 +238,7 @@ mod tests {
         "#,
         )
         .expect("config");
-        assert!(!check_main_thread_block(&input, &config, false));
+        assert!(!check_main_thread_block(&input, &config, false, false));
     }
 
     #[test]
@@ -242,7 +246,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
         let config = config_with_main_thread_default("deny");
-        assert!(!check_main_thread_block(&input, &config, true));
+        assert!(!check_main_thread_block(&input, &config, true, false));
     }
 
     #[test]
@@ -250,7 +254,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
         let config = config_with_main_thread_default("allow");
-        assert!(!check_main_thread_block(&input, &config, false));
+        assert!(!check_main_thread_block(&input, &config, false, false));
     }
 
     #[test]
@@ -325,8 +329,7 @@ mod tests {
     fn test_write_allow_paths_match() {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/mcp_probe.py".to_string());
-        let config: Config =
-            toml::from_str(r#"write_allow_paths = ["/tmp/*"]"#).expect("config");
+        let config: Config = toml::from_str(r#"write_allow_paths = ["/tmp/*"]"#).expect("config");
         assert!(handle_non_bash_tool(&input, &config, false));
     }
 

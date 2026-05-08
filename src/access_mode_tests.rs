@@ -1,8 +1,8 @@
 use crate::config::{Config, Permission};
 use crate::{
     HookInput, analyze_and_resolve, apply_access_mode_permission, apply_access_mode_result,
-    build_codex_hook_output, build_hook_output, build_reason, edits_allowed,
-    handle_subagent_event, parse_hook_input, permission_name, resolve_passthrough,
+    build_codex_hook_output, build_hook_output, build_reason, edits_allowed, handle_subagent_event,
+    has_codex_env, parse_hook_input, permission_name, resolve_passthrough,
     serialize_codex_hook_output, serialize_hook_output,
 };
 use serde_json::json;
@@ -316,6 +316,20 @@ fn test_is_codex_true_when_nested_under_hook_event() {
 }
 
 #[test]
+fn test_is_codex_runtime_uses_codex_env_marker() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" }
+    }))
+    .expect("hook input");
+
+    assert!(crate::is_codex_runtime_with_env(
+        &input,
+        ["CODEX_THREAD_ID"]
+    ));
+}
+
+#[test]
 fn test_is_codex_false_for_claude_payload() {
     let input: HookInput = serde_json::from_value(json!({
         "tool_name": "Bash",
@@ -324,6 +338,13 @@ fn test_is_codex_false_for_claude_payload() {
     }))
     .expect("hook input");
     assert!(!input.is_codex());
+}
+
+#[test]
+fn test_has_codex_env_detects_codex_markers() {
+    assert!(has_codex_env(["CODEX_THREAD_ID"]));
+    assert!(has_codex_env(["PATH", "CODEX_CI"]));
+    assert!(!has_codex_env(["PATH", "HOME"]));
 }
 
 #[test]

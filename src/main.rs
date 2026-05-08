@@ -33,6 +33,8 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 
+const CODEX_ENV_MARKERS: [&str; 2] = ["CODEX_THREAD_ID", "CODEX_CI"];
+
 #[cfg(test)]
 pub(crate) use analysis::analyze_command;
 
@@ -87,12 +89,29 @@ impl HookInput {
     }
 
     /// Codex sets `access_mode` (or nests it under `hook_event`) and rejects
-    /// Claude-only response keys (`permissionDecision: allow|ask`,
-    /// `updatedInput`). Detect the caller from that field so we can emit a
-    /// codex-shaped output instead.
+    /// Claude-only response keys (`permissionDecision`, `updatedInput`).
+    /// Detect the caller from that field so we can emit a codex-shaped output
+    /// instead.
     pub(crate) fn is_codex(&self) -> bool {
         self.access_mode().is_some()
     }
+}
+
+fn has_codex_env(vars: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
+    vars.into_iter()
+        .any(|name| CODEX_ENV_MARKERS.contains(&name.as_ref()))
+}
+
+pub(crate) fn is_codex_runtime_with_env(
+    hook_input: &HookInput,
+    env_names: impl IntoIterator<Item = impl AsRef<str>>,
+) -> bool {
+    hook_input.is_codex() || has_codex_env(env_names)
+}
+
+pub(crate) fn is_codex_runtime(hook_input: &HookInput) -> bool {
+    let env_names = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok());
+    is_codex_runtime_with_env(hook_input, env_names)
 }
 
 /// Check if edits are allowed based on permission mode
@@ -423,7 +442,7 @@ fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewr
             "allow",
             "alias rewrite",
             Some(serde_json::json!({ "command": command })),
-            hook_input.is_codex(),
+            is_codex_runtime(hook_input),
         );
     }
 }
@@ -442,7 +461,13 @@ fn emit_analyzed_decision(
         command,
         result.reason
     );
-    emit_decision(command, result, config, alias_rewritten, hook_input.is_codex());
+    emit_decision(
+        command,
+        result,
+        config,
+        alias_rewritten,
+        is_codex_runtime(hook_input),
+    );
 }
 
 fn main() {
