@@ -165,52 +165,49 @@ fn has_write_open(code: &str) -> bool {
     false
 }
 
-/// Check if Python code only uses read-only operations
-fn has_safe_subprocess_git_readonly(code: &str) -> bool {
-    let safe_calls = ["run", "check_output", "call"];
-    let safe_git_invocations = [
-        "['git', 'diff']",
-        "[\"git\", \"diff\"]",
-        "['git', 'log']",
-        "[\"git\", \"log\"]",
-        "['git', 'show']",
-        "[\"git\", \"show\"]",
-    ];
+/// Check if every subprocess reference is a read-only git invocation.
+fn subprocess_calls_are_safe_git_readonly(code: &str) -> bool {
+    let safe_call = Regex::new(
+        r#"(?s)(?:subprocess|__import__\(\s*['"]subprocess['"]\s*\))\s*\.\s*(?:run|check_output|call)\s*\(\s*\[\s*['"]git['"]\s*,\s*['"](?:diff|log|show)['"]\s*\]"#,
+    )
+    .expect("valid subprocess safe-call regex");
+    let import_subprocess = Regex::new(r#"(?m)\bimport\s+subprocess\s*(?:;|$)?"#)
+        .expect("valid subprocess import regex");
 
-    for call in safe_calls {
-        for git_args in safe_git_invocations {
-            let direct = format!("subprocess.{call}({git_args}");
-            let imported = format!("__import__('subprocess').{call}({git_args}");
-            let imported_alt = format!("__import__(\"subprocess\").{call}({git_args}");
-
-            if code.contains(&direct) || code.contains(&imported) || code.contains(&imported_alt)
-            {
-                return true;
-            }
-        }
+    if !safe_call.is_match(code) {
+        return false;
     }
 
-    false
+    let without_safe_calls = safe_call.replace_all(code, "");
+    let without_imports = import_subprocess.replace_all(&without_safe_calls, "");
+
+    !without_imports.to_lowercase().contains("subprocess")
+}
+
+fn is_safe_import_module(module: &str, allow_subprocess: bool) -> bool {
+    (module == "subprocess" && allow_subprocess) || SAFE_IMPORT_MODULES.contains(&module)
+}
+
+fn extract_import_module(rest: &str) -> Option<String> {
+    let paren = rest.find('(')?;
+    extract_string_arg(&rest[paren + 1..])
 }
 
 /// Check if all __import__() calls use safe modules
-fn has_safe_imports_only(code: &str) -> bool {
+fn has_safe_imports_only(code: &str, allow_subprocess: bool) -> bool {
     let mut pos = 0;
     while let Some(idx) = code[pos..].find("__import__") {
         let start = pos + idx + "__import__".len();
-        // Find the opening paren and extract module name
         let rest = &code[start..];
-        if let Some(paren) = rest.find('(') {
-            let after_paren = &rest[paren + 1..];
-            if let Some(module) = extract_string_arg(after_paren) {
-                if !SAFE_IMPORT_MODULES.contains(&module.as_str()) {
-                    return false;
-                }
-            } else {
-                // Can't determine module — not safe
-                return false;
-            }
+
+        let Some(module) = extract_import_module(rest) else {
+            return false;
+        };
+
+        if !is_safe_import_module(&module, allow_subprocess) {
+            return false;
         }
+
         pos = start;
     }
     true
@@ -218,18 +215,25 @@ fn has_safe_imports_only(code: &str) -> bool {
 
 fn is_readonly_python(code: &str) -> bool {
     let code_lower = code.to_lowercase();
+    let has_subprocess = code_lower.contains("subprocess");
+    let has_safe_subprocess = has_subprocess && subprocess_calls_are_safe_git_readonly(code);
+
+    if has_subprocess && !has_safe_subprocess {
+        return false;
+    }
+
     for pattern in DANGEROUS_PATTERNS {
+        if *pattern == "subprocess" && has_safe_subprocess {
+            continue;
+        }
+
         if contains_dangerous_python_pattern(code, &code_lower, pattern) {
             return false;
         }
     }
 
     // Check __import__() calls against safe module whitelist
-    if code.contains("__import__") && !has_safe_imports_only(code) {
-        return false;
-    }
-
-    if code.contains("subprocess") && !has_safe_subprocess_git_readonly(code) {
+    if code.contains("__import__") && !has_safe_imports_only(code, has_safe_subprocess) {
         return false;
     }
 
@@ -605,7 +609,10 @@ mod tests {
     fn test_check_output_git_diff_allowed() {
         let cmd = make_cmd(
             "python3",
-            &["-c", "import subprocess; subprocess.check_output(['git', 'diff'])"],
+            &[
+                "-c",
+                "import subprocess; subprocess.check_output(['git', 'diff'])",
+            ],
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
@@ -615,7 +622,10 @@ mod tests {
     fn test_check_output_git_log_allowed() {
         let cmd = make_cmd(
             "python3",
-            &["-c", "import subprocess; subprocess.check_output(['git', 'log'])"],
+            &[
+                "-c",
+                "import subprocess; subprocess.check_output(['git', 'log'])",
+            ],
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
@@ -625,10 +635,33 @@ mod tests {
     fn test_check_output_git_show_allowed() {
         let cmd = make_cmd(
             "python3",
-            &["-c", "import subprocess; subprocess.check_output(['git', 'show'])"],
+            &[
+                "-c",
+                "import subprocess; subprocess.check_output(['git', 'show'])",
+            ],
         );
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_safe_subprocess_plus_unsafe_subprocess_asks() {
+        let cmd = make_cmd(
+            "python3",
+            &[
+                "-c",
+                "import subprocess; subprocess.run(['git', 'diff']); subprocess.run(['ls'])",
+            ],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_import_only_subprocess_asks() {
+        let cmd = make_cmd("python3", &["-c", "import subprocess; print('ready')"]);
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]

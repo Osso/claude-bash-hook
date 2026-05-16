@@ -157,7 +157,6 @@ fn test_resolve_passthrough_keeps_non_passthrough() {
     assert_eq!(resolved.reason, "safe");
 }
 
-
 #[test]
 fn test_handle_subagent_event_start_and_stop() {
     let session_id = format!("test-session-{}", std::process::id());

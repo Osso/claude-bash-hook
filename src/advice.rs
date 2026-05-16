@@ -129,7 +129,10 @@ mod tests {
 
     #[test]
     fn parse_unsure() {
-        assert!(matches!(parse_advice("UNSURE depends on context"), Advice::Unsure));
+        assert!(matches!(
+            parse_advice("UNSURE depends on context"),
+            Advice::Unsure
+        ));
     }
 
     #[test]
