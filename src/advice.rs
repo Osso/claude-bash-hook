@@ -1,178 +1,139 @@
-//! AI-powered advice for permission decisions
+//! LLM-based passthrough classifier using codex spark.
+//! Intercepts commands the rule engine left as passthrough and classifies
+//! them as Allow (safe), Ask (unsafe), or real passthrough (unsure).
 
-use crate::config::Permission;
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Get AI advice on whether to allow a command
-pub fn get_advice(command: &str, reason: &str, permission: &Permission) -> Option<String> {
-    let perm_str = permission_label(permission)?;
-    let prompt = build_prompt(command, reason, perm_str);
-    let mut child = spawn_claude_safe(&prompt)?;
-    wait_for_child(&mut child)?;
-    read_child_output(&mut child)
+use crate::config::{Permission, PermissionResult};
+
+const CODEX_MODEL: &str = "gpt-5.3-codex-spark";
+const CODEX_TIMEOUT: Duration = Duration::from_secs(8);
+
+enum Advice {
+    Safe { reason: String },
+    Unsafe { reason: String },
+    Unsure,
 }
 
-fn permission_label(permission: &Permission) -> Option<&'static str> {
-    match permission {
-        Permission::Ask => "ask",
-        Permission::Deny => "deny",
-        _ => return None,
+/// Classify a passthrough bash command via codex spark.
+///
+/// Returns `Some(Allow)` for safe commands, `Some(Ask)` for unsafe ones
+/// (surfaces to the user), and `None` for unsure (real passthrough — let
+/// Claude Code's permission system decide).
+pub fn classify_passthrough(command: &str, cwd: Option<&str>) -> Option<PermissionResult> {
+    let rt = tokio::runtime::Runtime::new().ok()?;
+    let advice = rt.block_on(ask_codex(command, cwd))?;
+    match advice {
+        Advice::Safe { reason } => Some(PermissionResult {
+            permission: Permission::Allow,
+            reason,
+            suggestion: None,
+        }),
+        Advice::Unsafe { reason } => Some(PermissionResult {
+            permission: Permission::Ask,
+            reason,
+            suggestion: None,
+        }),
+        Advice::Unsure => None,
     }
-    .into()
 }
 
-fn build_prompt(command: &str, reason: &str, permission: &str) -> String {
+async fn ask_codex(command: &str, _cwd: Option<&str>) -> Option<Advice> {
+    use llm_sdk::Backend;
+    use llm_sdk::codex_cli::CodexCli;
+
+    let backend = CodexCli::new()
+        .ok()?
+        .model(CODEX_MODEL)
+        .timeout(CODEX_TIMEOUT);
+    let prompt = build_prompt(command);
+    let output = backend.complete(&prompt).await.ok()?;
+    Some(parse_advice(&output.text))
+}
+
+fn build_prompt(command: &str) -> String {
     format!(
-        "A CLI permission hook is asking whether to allow this bash command.\n\
-         Command: {}\n\
-         Current decision: {} because: {}\n\n\
-         Should this command be allowed? Reply with ONLY:\n\
-         - \"Allow: <reason>\" if the command is safe\n\
-         - \"Deny: <reason>\" if risky\n\
-         Keep under 30 words.",
-        command, permission, reason
+        "An AI coding agent wants to run this bash command:\n\
+         Command: {command}\n\
+         \n\
+         Decide whether this should be auto-allowed for the rest of the session.\n\
+         Reply with EXACTLY one of, followed by a one-line reason:\n\
+         \n\
+         SAFE <reason>   — read-only OR easily reversible inside the project\n\
+                          (git commit/branch/merge/rebase/stash/reset, mkdir,\n\
+                          touch, file edits in cwd, cargo build, npm install,\n\
+                          curl GET, docker build). Anything you can undo with\n\
+                          a follow-up command in the same repo is SAFE.\n\
+         UNSAFE <reason> — IRREVERSIBLE or BLAST RADIUS beyond the repo\n\
+                          (`rm -rf` outside cwd, `dd of=/dev/...`,\n\
+                          `git push --force` to shared branches, `DROP TABLE`\n\
+                          on prod, `kubectl delete` on prod, `sudo` mutating\n\
+                          system state, `curl ... | sh`, sending real email\n\
+                          / Slack / API calls to third-party services).\n\
+         UNSURE <reason> — ambiguous; let the human decide\n\
+         \n\
+         Modifying repository state is the AGENT'S JOB. Don't flag a command \
+         UNSAFE just because it writes files, creates commits, or changes git \
+         history — those are recoverable. Reserve UNSAFE for things a human \
+         would also want a chance to refuse.\n\
+         \n\
+         Err UNSURE — not UNSAFE — for anything you're not confident about."
     )
 }
 
-fn spawn_claude_safe(prompt: &str) -> Option<std::process::Child> {
-    spawn_claude_command("claude-safe", prompt)
-}
-
-fn spawn_claude_command(binary: &str, prompt: &str) -> Option<std::process::Child> {
-    Command::new(binary)
-        .args(["-p", &prompt, "--model", "haiku"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()
-}
-
-fn wait_for_child(child: &mut std::process::Child) -> Option<()> {
-    wait_for_child_with_timeout(child, Duration::from_secs(10), Duration::from_millis(100))
-}
-
-fn wait_for_child_with_timeout(
-    child: &mut std::process::Child,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> Option<()> {
-    let start = Instant::now();
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(poll_interval),
-            _ => {
-                let _ = child.kill();
-                return None;
-            }
-        }
+fn parse_advice(text: &str) -> Advice {
+    let trimmed = text.trim();
+    let upper = trimmed.to_uppercase();
+    let reason_after = |needle: &str| -> String {
+        upper
+            .find(needle)
+            .map(|i| trimmed[i + needle.len()..].trim().to_string())
+            .unwrap_or_default()
+    };
+    // UNSAFE / UNSURE both contain "SAFE" as a substring — check longer tokens first.
+    if upper.starts_with("UNSAFE") {
+        return Advice::Unsafe {
+            reason: reason_after("UNSAFE"),
+        };
     }
-
-    Some(())
-}
-
-fn read_child_output(child: &mut std::process::Child) -> Option<String> {
-    let mut output = String::new();
-    let stdout = child.stdout.as_mut()?;
-    stdout.read_to_string(&mut output).ok()?;
-
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(format!("AI advice: {}", trimmed))
+    if upper.starts_with("UNSURE") {
+        return Advice::Unsure;
     }
+    if upper.starts_with("SAFE") {
+        return Advice::Safe {
+            reason: reason_after("SAFE"),
+        };
+    }
+    Advice::Unsure
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command as ProcessCommand;
 
     #[test]
-    fn test_permission_label_for_supported_permissions() {
-        assert_eq!(permission_label(&Permission::Ask), Some("ask"));
-        assert_eq!(permission_label(&Permission::Deny), Some("deny"));
-        assert_eq!(permission_label(&Permission::Allow), None);
+    fn parse_safe() {
+        match parse_advice("SAFE read-only listing") {
+            Advice::Safe { reason } => assert_eq!(reason, "read-only listing"),
+            _ => panic!("expected Safe"),
+        }
     }
 
     #[test]
-    fn test_build_prompt_contains_core_fields() {
-        let prompt = build_prompt("rm -rf /tmp/x", "dangerous", "ask");
-        assert!(prompt.contains("Command: rm -rf /tmp/x"));
-        assert!(prompt.contains("Current decision: ask because: dangerous"));
-        assert!(prompt.contains("Allow: <reason>"));
-        assert!(prompt.contains("Deny: <reason>"));
+    fn parse_unsafe_beats_safe_substring() {
+        match parse_advice("UNSAFE deletes data") {
+            Advice::Unsafe { reason } => assert_eq!(reason, "deletes data"),
+            _ => panic!("expected Unsafe"),
+        }
     }
 
     #[test]
-    fn test_get_advice_returns_none_for_unsupported_permission() {
-        assert_eq!(get_advice("ls -la", "safe", &Permission::Allow), None);
-        assert_eq!(get_advice("ls -la", "safe", &Permission::Passthrough), None);
+    fn parse_unsure() {
+        assert!(matches!(parse_advice("UNSURE depends on context"), Advice::Unsure));
     }
 
     #[test]
-    fn test_wait_for_child_success() {
-        let mut child = ProcessCommand::new("sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .expect("spawn shell");
-        assert_eq!(wait_for_child(&mut child), Some(()));
-    }
-
-    #[test]
-    fn test_spawn_claude_command_returns_none_for_missing_binary() {
-        assert!(spawn_claude_command("/definitely/missing/claude-safe", "prompt").is_none());
-    }
-
-    #[test]
-    fn test_wait_for_child_times_out() {
-        let mut child = ProcessCommand::new("sh")
-            .args(["-c", "sleep 1"])
-            .spawn()
-            .expect("spawn shell");
-        assert_eq!(
-            wait_for_child_with_timeout(&mut child, Duration::ZERO, Duration::from_millis(1)),
-            None
-        );
-        let _ = child.wait();
-    }
-
-    #[test]
-    fn test_read_child_output_returns_prefixed_text() {
-        let mut child = ProcessCommand::new("sh")
-            .args(["-c", "printf 'Allow: safe\\n'"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn shell");
-        let _ = child.wait();
-        assert_eq!(
-            read_child_output(&mut child),
-            Some("AI advice: Allow: safe".to_string())
-        );
-    }
-
-    #[test]
-    fn test_read_child_output_ignores_empty_stdout() {
-        let mut child = ProcessCommand::new("sh")
-            .args(["-c", "printf ''"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn shell");
-        let _ = child.wait();
-        assert_eq!(read_child_output(&mut child), None);
-    }
-
-    #[test]
-    fn test_read_child_output_requires_stdout_pipe() {
-        let mut child = ProcessCommand::new("sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .expect("spawn shell");
-        let _ = child.wait();
-        assert_eq!(read_child_output(&mut child), None);
+    fn parse_unknown_is_unsure() {
+        assert!(matches!(parse_advice("hmm not sure"), Advice::Unsure));
     }
 }

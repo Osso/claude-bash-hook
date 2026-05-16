@@ -64,9 +64,10 @@ pub struct Config {
     #[serde(default)]
     pub main_thread_default: Option<String>,
 
-    /// Enable AI-powered advice for permission decisions
+    /// Classify passthrough commands with codex spark (gpt-5.3-codex-spark).
+    /// SAFE → allow, UNSAFE → ask, UNSURE → real passthrough.
     #[serde(default)]
-    pub enable_advice: bool,
+    pub passthrough_llm: bool,
 
     /// Directories where git push to master/main is allowed
     #[serde(default)]

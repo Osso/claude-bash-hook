@@ -60,6 +60,8 @@ const READONLY_FUNCTIONS: &[&str] = &[
     "is_string",
     "isset",
     "empty",
+    "defined",
+    "constant",
     // String functions (read-only)
     "strlen",
     "strpos",
@@ -126,6 +128,16 @@ const READONLY_FUNCTIONS: &[&str] = &[
     "rawurlencode",
     "rawurldecode",
     "http_build_query",
+    // Network (read-only)
+    "gethostbyname",
+    "gethostbynamel",
+    "gethostbyaddr",
+    "checkdnsrr",
+    "dns_get_record",
+    "dns_check_record",
+    "getmxrr",
+    "ip2long",
+    "long2ip",
     // More array functions
     "array_keys",
     "array_unique",
@@ -377,6 +389,26 @@ mod tests {
     #[test]
     fn test_method_call_allowed() {
         let cmd = make_cmd(&["-r", r#"$obj->dangerousFunction();"#]);
+        let result = check_php_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_gethostbynamel_allowed() {
+        let cmd = make_cmd(&[
+            "-r",
+            r#"var_export(gethostbynamel("93.184.216.34")); echo "\n"; var_export(gethostbynamel("localhost")); echo "\n";"#,
+        ]);
+        let result = check_php_script(&cmd).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_dns_lookup_allowed() {
+        let cmd = make_cmd(&[
+            "-r",
+            r#"var_export(checkdnsrr("example.com", "A")); echo "\n"; var_export(getmxrr("example.com", $hosts)); echo "\n";"#,
+        ]);
         let result = check_php_script(&cmd).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }

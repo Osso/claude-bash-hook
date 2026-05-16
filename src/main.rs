@@ -354,18 +354,6 @@ fn resolve_passthrough(result: PermissionResult, is_nushell: bool) -> Option<Per
     }
 }
 
-fn build_reason(command: &str, result: &PermissionResult, config: &Config) -> String {
-    if config.enable_advice && matches!(result.permission, Permission::Ask | Permission::Deny) {
-        let base_reason = output::format_reason(command, result);
-        if let Some(adv) = advice::get_advice(command, &result.reason, &result.permission) {
-            return format!("{}\n{}", base_reason, adv);
-        }
-        base_reason
-    } else {
-        output::format_reason(command, result)
-    }
-}
-
 fn emit_decision(
     command: &str,
     result: &PermissionResult,
@@ -373,7 +361,7 @@ fn emit_decision(
     alias_command: Option<&str>,
     is_codex: bool,
 ) {
-    let reason = build_reason(command, result, config);
+    let reason = output::format_reason(command, result);
     let rewrite_input = rewrite::maybe_rewrite(command, result, config);
     let updated_input = match (alias_command, rewrite_input) {
         (_, Some(rw)) => Some(rw), // rewrite already uses the aliased command string
@@ -416,7 +404,11 @@ fn analyze_and_resolve(
         analysis::analyze_command(command, config, ctx, hook_input.cwd.as_deref())
     };
     let result = apply_access_mode_result(result, access_mode.as_deref());
-    resolve_passthrough(result, is_nushell)
+    let resolved = resolve_passthrough(result, is_nushell);
+    if resolved.is_none() && !is_nushell && config.passthrough_llm {
+        return advice::classify_passthrough(command, hook_input.cwd.as_deref());
+    }
+    resolved
 }
 
 fn session_has_subagents(session_id: Option<&str>) -> bool {

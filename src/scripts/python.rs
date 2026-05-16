@@ -166,6 +166,33 @@ fn has_write_open(code: &str) -> bool {
 }
 
 /// Check if Python code only uses read-only operations
+fn has_safe_subprocess_git_readonly(code: &str) -> bool {
+    let safe_calls = ["run", "check_output", "call"];
+    let safe_git_invocations = [
+        "['git', 'diff']",
+        "[\"git\", \"diff\"]",
+        "['git', 'log']",
+        "[\"git\", \"log\"]",
+        "['git', 'show']",
+        "[\"git\", \"show\"]",
+    ];
+
+    for call in safe_calls {
+        for git_args in safe_git_invocations {
+            let direct = format!("subprocess.{call}({git_args}");
+            let imported = format!("__import__('subprocess').{call}({git_args}");
+            let imported_alt = format!("__import__(\"subprocess\").{call}({git_args}");
+
+            if code.contains(&direct) || code.contains(&imported) || code.contains(&imported_alt)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Check if all __import__() calls use safe modules
 fn has_safe_imports_only(code: &str) -> bool {
     let mut pos = 0;
@@ -199,6 +226,10 @@ fn is_readonly_python(code: &str) -> bool {
 
     // Check __import__() calls against safe module whitelist
     if code.contains("__import__") && !has_safe_imports_only(code) {
+        return false;
+    }
+
+    if code.contains("subprocess") && !has_safe_subprocess_git_readonly(code) {
         return false;
     }
 
@@ -541,6 +572,66 @@ mod tests {
     }
 
     #[test]
+    fn test_subprocess_git_diff_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import subprocess; subprocess.run(['git', 'diff'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_subprocess_git_log_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import subprocess; subprocess.run(['git', 'log'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_subprocess_git_show_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import subprocess; subprocess.run(['git', 'show'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_check_output_git_diff_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import subprocess; subprocess.check_output(['git', 'diff'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_check_output_git_log_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import subprocess; subprocess.check_output(['git', 'log'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_check_output_git_show_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "import subprocess; subprocess.check_output(['git', 'show'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
     fn test_os_system_asks() {
         let cmd = make_cmd("python3", &["-c", "import os; os.system('ls')"]);
         let result = check_python_script(&cmd, None, None).unwrap();
@@ -685,6 +776,16 @@ mod tests {
         let cmd = make_cmd("python3", &["-c", "__import__('subprocess').run(['ls'])"]);
         let result = check_python_script(&cmd, None, None).unwrap();
         assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_dunder_import_subprocess_git_diff_allowed() {
+        let cmd = make_cmd(
+            "python3",
+            &["-c", "__import__('subprocess').run(['git', 'diff'])"],
+        );
+        let result = check_python_script(&cmd, None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]

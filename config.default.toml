@@ -30,8 +30,9 @@ default = "passthrough"
 # prompt). `ask_paths` still wins on overlap. Same glob syntax as above.
 # read_allow_paths = ["~/Repos/*", "~/Projects/*"]
 
-# Enable AI-powered advice for permission decisions (uses claude-safe CLI)
-enable_advice = false
+# Classify passthrough commands via gpt-5.3-codex-spark (llm-sdk in-process).
+# SAFE → allow, UNSAFE → ask, UNSURE → real passthrough.
+passthrough_llm = false
 
 # Commands where SQL is passed as a positional argument (after the subcommand).
 # Format: "command subcommand" — e.g., "groundcover-cli sql-clickhouse"

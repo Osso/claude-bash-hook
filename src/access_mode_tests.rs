@@ -1,7 +1,7 @@
 use crate::config::{Config, Permission};
 use crate::{
     HookInput, analyze_and_resolve, apply_access_mode_permission, apply_access_mode_result,
-    build_codex_hook_output, build_hook_output, build_reason, edits_allowed, handle_subagent_event,
+    build_codex_hook_output, build_hook_output, edits_allowed, handle_subagent_event,
     has_codex_env, parse_hook_input, permission_name, resolve_passthrough,
     serialize_codex_hook_output, serialize_hook_output,
 };
@@ -157,19 +157,6 @@ fn test_resolve_passthrough_keeps_non_passthrough() {
     assert_eq!(resolved.reason, "safe");
 }
 
-#[test]
-fn test_build_reason_without_advice_uses_formatter() {
-    let config: Config = toml::from_str(r#"enable_advice = false"#).unwrap();
-    let result = crate::config::PermissionResult {
-        permission: Permission::Ask,
-        reason: "why".to_string(),
-        suggestion: Some("suggestion".to_string()),
-    };
-    assert_eq!(
-        build_reason("git status", &result, &config),
-        "git status: why\nsuggestion"
-    );
-}
 
 #[test]
 fn test_handle_subagent_event_start_and_stop() {
