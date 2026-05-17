@@ -331,12 +331,30 @@ fn test_is_codex_true_for_unified_exec_tool_names() {
 #[test]
 fn test_is_codex_runtime_uses_codex_env_marker() {
     let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
+        "tool_name": "unknown_tool",
         "tool_input": { "command": "ls" }
     }))
     .expect("hook input");
 
     assert!(crate::is_codex_runtime_with_env(
+        &input,
+        ["CODEX_THREAD_ID"]
+    ));
+}
+
+#[test]
+fn test_is_codex_runtime_does_not_let_inherited_codex_env_override_claude_payload() {
+    let input: HookInput = serde_json::from_value(json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+        "permission_mode": "default",
+        "cwd": "/home/osso/Repos/codex",
+        "session_id": "claude-session"
+    }))
+    .expect("hook input");
+
+    assert!(!crate::is_codex_runtime_with_env(
         &input,
         ["CODEX_THREAD_ID"]
     ));

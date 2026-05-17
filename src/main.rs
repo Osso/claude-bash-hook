@@ -107,6 +107,16 @@ impl HookInput {
             || self.tool_use_id.is_some()
             || matches!(self.tool_name.as_str(), "exec_command" | "write_stdin")
     }
+
+    pub(crate) fn is_explicit_claude_payload(&self) -> bool {
+        self.hook_event_name.is_some()
+            && self.permission_mode.is_some()
+            && self.access_mode().is_none()
+            && self.turn_id.is_none()
+            && self.tool_use_id.is_none()
+            && !self.supports_updated_input
+            && matches!(self.tool_name.as_str(), "Bash" | "Write" | "Edit" | "Read")
+    }
 }
 
 fn has_codex_env(vars: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
@@ -118,7 +128,7 @@ pub(crate) fn is_codex_runtime_with_env(
     hook_input: &HookInput,
     env_names: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> bool {
-    hook_input.is_codex() || has_codex_env(env_names)
+    hook_input.is_codex() || (!hook_input.is_explicit_claude_payload() && has_codex_env(env_names))
 }
 
 pub(crate) fn is_codex_runtime(hook_input: &HookInput) -> bool {
