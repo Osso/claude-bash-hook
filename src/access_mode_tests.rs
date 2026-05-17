@@ -381,11 +381,7 @@ fn test_build_codex_hook_output_deny_shape_matches_codex_schema() {
 
 #[test]
 fn test_build_codex_hook_output_returns_none_for_bare_allow() {
-    let output = build_codex_hook_output("allow", "safe command", None)
-        .expect("allow should build for codex");
-    let value = serde_json::to_value(output).expect("serializable");
-    assert_eq!(value["decision"], "approve");
-    assert!(value.get("reason").is_none());
+    assert!(build_codex_hook_output("allow", "safe command", None).is_none());
 }
 
 #[test]
@@ -409,16 +405,13 @@ fn test_build_codex_hook_output_substitutes_reason_when_blank() {
 }
 
 #[test]
-fn test_build_codex_hook_output_drops_updated_input_on_allow() {
-    let output = build_codex_hook_output(
+fn test_build_codex_hook_output_drops_allow_rewrite() {
+    assert!(build_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
     )
-    .expect("allow should build a codex output");
-    let value = serde_json::to_value(output).expect("serializable");
-    assert_eq!(value["decision"], "approve");
-    assert!(value.get("updatedInput").is_none());
+    .is_none());
 }
 
 #[test]
@@ -432,23 +425,17 @@ fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
 }
 
 #[test]
-fn test_serialize_codex_hook_output_allow_with_rewrite_omits_updated_input() {
-    let json = serialize_codex_hook_output(
+fn test_serialize_codex_hook_output_returns_none_for_allow_with_rewrite() {
+    assert!(serialize_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
     )
-    .expect("allow should serialize");
-    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
-    assert_eq!(value["decision"], "approve");
-    assert!(value.get("updatedInput").is_none());
+    .is_none());
 }
 
 #[test]
 fn test_serialize_codex_hook_output_returns_none_for_bare_allow_or_ask() {
-    let json = serialize_codex_hook_output("allow", "safe", None)
-        .expect("allow should serialize for codex");
-    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
-    assert_eq!(value["decision"], "approve");
+    assert!(serialize_codex_hook_output("allow", "safe", None).is_none());
     assert!(serialize_codex_hook_output("ask", "needs review", None).is_none());
 }
