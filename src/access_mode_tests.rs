@@ -385,8 +385,14 @@ fn test_build_codex_hook_output_returns_none_for_bare_allow() {
 }
 
 #[test]
-fn test_build_codex_hook_output_returns_none_for_ask() {
-    assert!(build_codex_hook_output("ask", "needs review", None).is_none());
+fn test_build_codex_hook_output_emits_hook_specific_ask() {
+    let output =
+        build_codex_hook_output("ask", "needs review", None).expect("ask should build for codex");
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
+    assert_eq!(
+        output["hookSpecificOutput"]["permissionDecisionReason"],
+        "needs review"
+    );
 }
 
 #[test]
@@ -405,13 +411,18 @@ fn test_build_codex_hook_output_substitutes_reason_when_blank() {
 }
 
 #[test]
-fn test_build_codex_hook_output_drops_allow_rewrite() {
-    assert!(build_codex_hook_output(
+fn test_build_codex_hook_output_preserves_allow_rewrite() {
+    let output = build_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
     )
-    .is_none());
+    .expect("allow rewrite should build for codex");
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(
+        output["hookSpecificOutput"]["updatedInput"]["command"],
+        "rtk git status"
+    );
 }
 
 #[test]
@@ -425,17 +436,26 @@ fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
 }
 
 #[test]
-fn test_serialize_codex_hook_output_returns_none_for_allow_with_rewrite() {
-    assert!(serialize_codex_hook_output(
+fn test_serialize_codex_hook_output_returns_hook_specific_allow_with_rewrite() {
+    let json = serialize_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
     )
-    .is_none());
+    .expect("allow rewrite should serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(
+        value["hookSpecificOutput"]["updatedInput"]["command"],
+        "rtk git status"
+    );
 }
 
 #[test]
-fn test_serialize_codex_hook_output_returns_none_for_bare_allow_or_ask() {
+fn test_serialize_codex_hook_output_drops_bare_allow_but_keeps_ask() {
     assert!(serialize_codex_hook_output("allow", "safe", None).is_none());
-    assert!(serialize_codex_hook_output("ask", "needs review", None).is_none());
+    let json =
+        serialize_codex_hook_output("ask", "needs review", None).expect("ask should serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "ask");
 }

@@ -200,10 +200,10 @@ struct HookSpecificOutput {
     updated_input: Option<serde_json::Value>,
 }
 
-/// Codex parses the `PreToolUse` legacy block shape. Older deployed builds
-/// reject both Claude `permissionDecision:allow` and legacy `decision:approve`,
-/// so the Codex path must stay silent for allow/ask and emit only hard blocks.
-/// `updatedInput` is not part of the accepted wire shape for those builds.
+/// Codex parses legacy `decision:block` and Claude-shaped
+/// `hookSpecificOutput.permissionDecision:ask`. Allow stays silent here because
+/// older deployed Codex builds reject both Claude `permissionDecision:allow`
+/// and legacy `decision:approve`.
 #[derive(Debug, Serialize)]
 struct CodexHookOutput {
     decision: String,
@@ -241,13 +241,12 @@ fn serialize_hook_output(
 }
 
 /// Build the codex-shaped output. Returns None when there is nothing to emit:
-/// - `ask` (codex doesn't support ask in this hook)
 /// - `allow` without an `updatedInput` rewrite (no-op against codex's own flow)
 fn build_codex_hook_output(
     decision: &str,
     reason: &str,
-    _updated_input: Option<serde_json::Value>,
-) -> Option<CodexHookOutput> {
+    updated_input: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
     match decision {
         "deny" => {
             let trimmed = reason.trim();
@@ -256,12 +255,20 @@ fn build_codex_hook_output(
             } else {
                 reason.to_string()
             };
-            Some(CodexHookOutput {
+            serde_json::to_value(CodexHookOutput {
                 decision: "block".to_string(),
                 reason: Some(reason),
             })
+            .ok()
         }
-        "allow" | "ask" => None,
+        "ask" => serde_json::to_value(build_hook_output("ask", reason, updated_input)).ok(),
+        "allow" => {
+            if updated_input.is_some() {
+                serde_json::to_value(build_hook_output("allow", reason, updated_input)).ok()
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -275,8 +282,9 @@ fn serialize_codex_hook_output(
 }
 
 /// Output a hook decision, optionally with a rewritten command. Codex currently
-/// accepts deny + reason consistently; allow/ask are dropped on the Codex path
-/// so the hook never aborts a command with an unsupported approval shape.
+/// accepts deny + reason and ask + optional rewrite. Bare allow is dropped on
+/// the Codex path so the hook never aborts a command with an unsupported
+/// approval shape.
 fn output_decision(
     decision: &str,
     reason: &str,
