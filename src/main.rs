@@ -57,6 +57,12 @@ struct HookInput {
     /// Session identifier
     #[serde(default)]
     session_id: Option<String>,
+    /// Codex extension: active turn id. Claude Code does not send this today.
+    #[serde(default)]
+    turn_id: Option<String>,
+    /// Codex extension: current tool-use id.
+    #[serde(default)]
+    tool_use_id: Option<String>,
     /// Hook event name: "PreToolUse", "SubagentStart", "SubagentStop", etc.
     #[serde(default)]
     hook_event_name: Option<String>,
@@ -88,12 +94,15 @@ impl HookInput {
             .and_then(|event| event.access_mode.as_deref()))
     }
 
-    /// Codex sets `access_mode` (or nests it under `hook_event`) and rejects
-    /// Claude-only response keys (`permissionDecision`, `updatedInput`).
-    /// Detect the caller from that field so we can emit a codex-shaped output
-    /// instead.
+    /// Detect Codex from explicit mode fields and Codex-only hook payload fields.
+    ///
+    /// Older Codex builds omitted `access_mode`; relying only on that field
+    /// made us emit Claude-shaped permission output that Codex rejected.
     pub(crate) fn is_codex(&self) -> bool {
         self.access_mode().is_some()
+            || self.turn_id.is_some()
+            || self.tool_use_id.is_some()
+            || matches!(self.tool_name.as_str(), "exec_command" | "write_stdin")
     }
 }
 

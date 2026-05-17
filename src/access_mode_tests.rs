@@ -302,6 +302,38 @@ fn test_is_codex_true_when_nested_under_hook_event() {
 }
 
 #[test]
+fn test_is_codex_true_when_codex_turn_id_present() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+        "turn_id": "turn-1"
+    }))
+    .expect("hook input");
+    assert!(input.is_codex());
+}
+
+#[test]
+fn test_is_codex_true_when_codex_tool_use_id_present() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+        "tool_use_id": "call-1"
+    }))
+    .expect("hook input");
+    assert!(input.is_codex());
+}
+
+#[test]
+fn test_is_codex_true_for_unified_exec_tool_names() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "exec_command",
+        "tool_input": { "command": "ls" }
+    }))
+    .expect("hook input");
+    assert!(input.is_codex());
+}
+
+#[test]
 fn test_is_codex_runtime_uses_codex_env_marker() {
     let input: HookInput = serde_json::from_value(json!({
         "tool_name": "Bash",

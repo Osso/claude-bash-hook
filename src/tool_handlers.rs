@@ -203,6 +203,8 @@ mod tests {
                 access_mode: None,
                 cwd: None,
                 session_id: None,
+                turn_id: None,
+                tool_use_id: None,
                 hook_event_name: None,
                 hook_event: None,
             }
