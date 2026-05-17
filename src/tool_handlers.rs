@@ -35,12 +35,13 @@ fn is_regex_replace_tool(tool_name: &str) -> bool {
 }
 
 fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool, is_codex: bool) {
+    let supports_updated_input = hook_input.supports_updated_input;
     if check_main_thread_block(hook_input, config, is_subagent, is_codex) {
         return;
     }
     if let Some(ref path) = hook_input.tool_input.file_path {
         if let Some(result) = check_write_path(path) {
-            output_decision(&result.0, &result.1, None, is_codex);
+            output_decision(&result.0, &result.1, None, is_codex, supports_updated_input);
             return;
         }
         if config.is_ask_path(path) {
@@ -49,6 +50,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
                 &format!("{} to protected path {}", hook_input.tool_name, path),
                 None,
                 is_codex,
+                supports_updated_input,
             );
             return;
         }
@@ -58,6 +60,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
                 &format!("{} to allowed path {}", hook_input.tool_name, path),
                 None,
                 is_codex,
+                supports_updated_input,
             );
             return;
         }
@@ -77,6 +80,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
                 &result.reason,
                 None,
                 is_codex,
+                supports_updated_input,
             );
         }
         Permission::Passthrough => {}
@@ -87,6 +91,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
 /// auto-allow list; otherwise returns true without output so Claude Code's
 /// default applies. `ask_paths` wins on overlap.
 fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool {
+    let supports_updated_input = hook_input.supports_updated_input;
     let Some(ref path) = hook_input.tool_input.file_path else {
         return true;
     };
@@ -96,6 +101,7 @@ fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool 
             &format!("Read from protected path {}", path),
             None,
             is_codex,
+            supports_updated_input,
         );
         return true;
     }
@@ -105,6 +111,7 @@ fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool 
             &format!("Read from allowed path {}", path),
             None,
             is_codex,
+            supports_updated_input,
         );
     }
     true
@@ -137,6 +144,7 @@ fn check_main_thread_block(
         "main thread file writes disabled. Use Task() to delegate to subagents",
         None,
         is_codex,
+        hook_input.supports_updated_input,
     );
     true
 }
@@ -163,6 +171,7 @@ fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool, is_codex: boo
         &result.reason,
         None,
         is_codex,
+        hook_input.supports_updated_input,
     );
 }
 
@@ -207,6 +216,7 @@ mod tests {
                 tool_use_id: None,
                 hook_event_name: None,
                 hook_event: None,
+                supports_updated_input: false,
             }
         }
     }

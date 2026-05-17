@@ -63,6 +63,9 @@ struct HookInput {
     /// Codex extension: current tool-use id.
     #[serde(default)]
     tool_use_id: Option<String>,
+    /// Codex extension: runtime accepts `hookSpecificOutput.updatedInput`.
+    #[serde(default)]
+    supports_updated_input: bool,
     /// Hook event name: "PreToolUse", "SubagentStart", "SubagentStop", etc.
     #[serde(default)]
     hook_event_name: Option<String>,
@@ -245,6 +248,7 @@ fn build_codex_hook_output(
     decision: &str,
     reason: &str,
     updated_input: Option<serde_json::Value>,
+    _supports_updated_input: bool,
 ) -> Option<serde_json::Value> {
     match decision {
         "deny" => {
@@ -276,8 +280,15 @@ fn serialize_codex_hook_output(
     decision: &str,
     reason: &str,
     updated_input: Option<serde_json::Value>,
+    supports_updated_input: bool,
 ) -> Option<String> {
-    serde_json::to_string(&build_codex_hook_output(decision, reason, updated_input)?).ok()
+    serde_json::to_string(&build_codex_hook_output(
+        decision,
+        reason,
+        updated_input,
+        supports_updated_input,
+    )?)
+    .ok()
 }
 
 /// Output a hook decision, optionally with a rewritten command. Codex currently
@@ -289,9 +300,12 @@ fn output_decision(
     reason: &str,
     updated_input: Option<serde_json::Value>,
     is_codex: bool,
+    supports_updated_input: bool,
 ) {
     if is_codex {
-        if let Some(json) = serialize_codex_hook_output(decision, reason, updated_input) {
+        if let Some(json) =
+            serialize_codex_hook_output(decision, reason, updated_input, supports_updated_input)
+        {
             println!("{}", json);
         }
         return;
@@ -373,6 +387,7 @@ fn emit_decision(
     config: &Config,
     alias_command: Option<&str>,
     is_codex: bool,
+    supports_updated_input: bool,
 ) {
     let reason = output::format_reason(command, result);
     let rewrite_input = rewrite::maybe_rewrite(command, result, config);
@@ -387,7 +402,13 @@ fn emit_decision(
         Permission::Deny => "deny",
         Permission::Passthrough => unreachable!(),
     };
-    output_decision(decision, &reason, updated_input, is_codex);
+    output_decision(
+        decision,
+        &reason,
+        updated_input,
+        is_codex,
+        supports_updated_input,
+    );
 }
 
 /// Analyze a bash/nushell command, apply access mode, resolve passthrough.
@@ -448,6 +469,7 @@ fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewr
             "alias rewrite",
             Some(serde_json::json!({ "command": command })),
             is_codex_runtime(hook_input),
+            hook_input.supports_updated_input,
         );
     }
 }
@@ -472,6 +494,7 @@ fn emit_analyzed_decision(
         config,
         alias_rewritten,
         is_codex_runtime(hook_input),
+        hook_input.supports_updated_input,
     );
 }
 

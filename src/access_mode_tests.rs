@@ -362,9 +362,13 @@ fn test_has_codex_env_detects_codex_markers() {
 
 #[test]
 fn test_build_codex_hook_output_deny_shape_matches_codex_schema() {
-    let output =
-        build_codex_hook_output("deny", "git push origin master: blocks force pushes", None)
-            .expect("deny should build a codex output");
+    let output = build_codex_hook_output(
+        "deny",
+        "git push origin master: blocks force pushes",
+        None,
+        false,
+    )
+    .expect("deny should build a codex output");
     let value = serde_json::to_value(output).expect("serializable");
     assert_eq!(value["decision"], "block");
     assert_eq!(
@@ -376,13 +380,13 @@ fn test_build_codex_hook_output_deny_shape_matches_codex_schema() {
 
 #[test]
 fn test_build_codex_hook_output_returns_none_for_bare_allow() {
-    assert!(build_codex_hook_output("allow", "safe command", None).is_none());
+    assert!(build_codex_hook_output("allow", "safe command", None, false).is_none());
 }
 
 #[test]
 fn test_build_codex_hook_output_emits_hook_specific_ask() {
-    let output =
-        build_codex_hook_output("ask", "needs review", None).expect("ask should build for codex");
+    let output = build_codex_hook_output("ask", "needs review", None, false)
+        .expect("ask should build for codex");
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
     assert_eq!(
         output["hookSpecificOutput"]["permissionDecisionReason"],
@@ -392,7 +396,7 @@ fn test_build_codex_hook_output_emits_hook_specific_ask() {
 
 #[test]
 fn test_build_codex_hook_output_substitutes_reason_when_blank() {
-    let output = build_codex_hook_output("deny", "   ", None).expect("deny should build");
+    let output = build_codex_hook_output("deny", "   ", None, false).expect("deny should build");
     assert!(
         !serde_json::to_value(output)
             .expect("serializable")
@@ -406,13 +410,14 @@ fn test_build_codex_hook_output_substitutes_reason_when_blank() {
 }
 
 #[test]
-fn test_build_codex_hook_output_preserves_allow_rewrite() {
+fn test_build_codex_hook_output_keeps_allow_rewrite() {
     let output = build_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
+        false,
     )
-    .expect("allow rewrite should build for codex");
+    .expect("codex should receive the rewrite");
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
     assert_eq!(
         output["hookSpecificOutput"]["updatedInput"]["command"],
@@ -422,7 +427,7 @@ fn test_build_codex_hook_output_preserves_allow_rewrite() {
 
 #[test]
 fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
-    let json = serialize_codex_hook_output("deny", "rm -rf /: filesystem nuke", None)
+    let json = serialize_codex_hook_output("deny", "rm -rf /: filesystem nuke", None, false)
         .expect("deny should serialize");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
     assert_eq!(value["decision"], "block");
@@ -431,13 +436,14 @@ fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
 }
 
 #[test]
-fn test_serialize_codex_hook_output_returns_hook_specific_allow_with_rewrite() {
+fn test_serialize_codex_hook_output_keeps_allow_rewrite() {
     let json = serialize_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
+        false,
     )
-    .expect("allow rewrite should serialize");
+    .expect("codex should receive the rewrite");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
     assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "allow");
     assert_eq!(
@@ -448,9 +454,9 @@ fn test_serialize_codex_hook_output_returns_hook_specific_allow_with_rewrite() {
 
 #[test]
 fn test_serialize_codex_hook_output_drops_bare_allow_but_keeps_ask() {
-    assert!(serialize_codex_hook_output("allow", "safe", None).is_none());
-    let json =
-        serialize_codex_hook_output("ask", "needs review", None).expect("ask should serialize");
+    assert!(serialize_codex_hook_output("allow", "safe", None, false).is_none());
+    let json = serialize_codex_hook_output("ask", "needs review", None, false)
+        .expect("ask should serialize");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
     assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "ask");
 }
