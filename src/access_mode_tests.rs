@@ -43,10 +43,10 @@ fn test_hook_input_prefers_top_level_access_mode() {
 }
 
 #[test]
-fn test_full_access_upgrades_ask_to_allow() {
+fn test_full_access_keeps_ask() {
     assert_eq!(
         apply_access_mode_permission(Permission::Ask, Some("full_access")),
-        Permission::Allow
+        Permission::Ask
     );
 }
 
@@ -83,7 +83,7 @@ fn test_edits_allowed_modes() {
 }
 
 #[test]
-fn test_apply_access_mode_result_appends_reason() {
+fn test_apply_access_mode_result_does_not_annotate_unchanged_ask() {
     let result = apply_access_mode_result(
         crate::config::PermissionResult {
             permission: Permission::Ask,
@@ -92,13 +92,8 @@ fn test_apply_access_mode_result_appends_reason() {
         },
         Some("full_access"),
     );
-    assert_eq!(result.permission, Permission::Allow);
-    assert!(result.reason.contains("needs review"));
-    assert!(
-        result
-            .reason
-            .contains("access_mode=full_access upgraded ask to allow")
-    );
+    assert_eq!(result.permission, Permission::Ask);
+    assert_eq!(result.reason, "needs review");
 }
 
 #[test]

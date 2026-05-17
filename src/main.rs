@@ -134,7 +134,6 @@ pub(crate) fn apply_access_mode_permission(
 ) -> Permission {
     match permission {
         Permission::Deny => Permission::Deny,
-        Permission::Ask if matches!(access_mode, Some("full_access")) => Permission::Allow,
         Permission::Passthrough if matches!(access_mode, Some("full_access")) => Permission::Allow,
         Permission::Passthrough if matches!(access_mode, Some("supervised")) => Permission::Ask,
         _ => permission,
