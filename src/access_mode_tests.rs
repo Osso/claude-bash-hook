@@ -308,14 +308,14 @@ fn test_is_codex_true_when_codex_turn_id_present() {
 }
 
 #[test]
-fn test_is_codex_true_when_codex_tool_use_id_present() {
+fn test_is_codex_false_when_only_tool_use_id_present() {
     let input: HookInput = serde_json::from_value(json!({
         "tool_name": "Bash",
         "tool_input": { "command": "ls" },
         "tool_use_id": "call-1"
     }))
     .expect("hook input");
-    assert!(input.is_codex());
+    assert!(!input.is_codex());
 }
 
 #[test]
@@ -350,7 +350,8 @@ fn test_is_codex_runtime_does_not_let_inherited_codex_env_override_claude_payloa
         "tool_input": { "command": "ls" },
         "permission_mode": "default",
         "cwd": "/home/osso/Repos/codex",
-        "session_id": "claude-session"
+        "session_id": "claude-session",
+        "tool_use_id": "toolu_01claude"
     }))
     .expect("hook input");
 

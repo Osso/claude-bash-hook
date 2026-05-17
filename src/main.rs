@@ -60,7 +60,7 @@ struct HookInput {
     /// Codex extension: active turn id. Claude Code does not send this today.
     #[serde(default)]
     turn_id: Option<String>,
-    /// Codex extension: current tool-use id.
+    /// Current tool-use id. Claude Code also sends this on PreToolUse.
     #[serde(default)]
     tool_use_id: Option<String>,
     /// Codex extension: runtime accepts `hookSpecificOutput.updatedInput`.
@@ -104,16 +104,17 @@ impl HookInput {
     pub(crate) fn is_codex(&self) -> bool {
         self.access_mode().is_some()
             || self.turn_id.is_some()
-            || self.tool_use_id.is_some()
+            || self.supports_updated_input
             || matches!(self.tool_name.as_str(), "exec_command" | "write_stdin")
     }
 
     pub(crate) fn is_explicit_claude_payload(&self) -> bool {
+        let valid_tool_use_id = self.tool_use_id.as_deref().is_none_or(|id| !id.is_empty());
         self.hook_event_name.is_some()
             && self.permission_mode.is_some()
             && self.access_mode().is_none()
             && self.turn_id.is_none()
-            && self.tool_use_id.is_none()
+            && valid_tool_use_id
             && !self.supports_updated_input
             && matches!(self.tool_name.as_str(), "Bash" | "Write" | "Edit" | "Read")
     }
