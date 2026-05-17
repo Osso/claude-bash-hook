@@ -410,14 +410,27 @@ fn test_build_codex_hook_output_substitutes_reason_when_blank() {
 }
 
 #[test]
-fn test_build_codex_hook_output_keeps_allow_rewrite() {
+fn test_build_codex_hook_output_drops_allow_rewrite_without_support() {
+    assert!(
+        build_codex_hook_output(
+            "allow",
+            "alias rewrite",
+            Some(json!({ "command": "rtk git status" })),
+            false,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn test_build_codex_hook_output_keeps_allow_rewrite_with_support() {
     let output = build_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
-        false,
+        true,
     )
-    .expect("codex should receive the rewrite");
+    .expect("supported codex should receive the rewrite");
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
     assert_eq!(
         output["hookSpecificOutput"]["updatedInput"]["command"],
@@ -436,14 +449,27 @@ fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
 }
 
 #[test]
-fn test_serialize_codex_hook_output_keeps_allow_rewrite() {
+fn test_serialize_codex_hook_output_drops_allow_rewrite_without_support() {
+    assert!(
+        serialize_codex_hook_output(
+            "allow",
+            "alias rewrite",
+            Some(json!({ "command": "rtk git status" })),
+            false,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn test_serialize_codex_hook_output_keeps_allow_rewrite_with_support() {
     let json = serialize_codex_hook_output(
         "allow",
         "alias rewrite",
         Some(json!({ "command": "rtk git status" })),
-        false,
+        true,
     )
-    .expect("codex should receive the rewrite");
+    .expect("supported codex should receive the rewrite");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
     assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "allow");
     assert_eq!(

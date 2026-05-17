@@ -248,7 +248,7 @@ fn build_codex_hook_output(
     decision: &str,
     reason: &str,
     updated_input: Option<serde_json::Value>,
-    _supports_updated_input: bool,
+    supports_updated_input: bool,
 ) -> Option<serde_json::Value> {
     match decision {
         "deny" => {
@@ -266,7 +266,7 @@ fn build_codex_hook_output(
         }
         "ask" => serde_json::to_value(build_hook_output("ask", reason, updated_input)).ok(),
         "allow" => {
-            if updated_input.is_some() {
+            if supports_updated_input && updated_input.is_some() {
                 serde_json::to_value(build_hook_output("allow", reason, updated_input)).ok()
             } else {
                 None
