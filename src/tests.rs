@@ -739,3 +739,63 @@ fn test_source_dangerous_file() {
     ));
     assert_ne!(result.permission, Permission::Allow);
 }
+
+// skip_inner host rule tests
+
+#[test]
+fn test_ssh_skip_inner_allows_dangerous_command() {
+    // A specific host with skip_inner = true should allow systemctl start
+    // without analyzing the inner command at all.
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["ssh"]
+        permission = "check_host"
+        reason = "remote connection"
+        host_rules = [
+            { pattern = "starrocks-pilot", permission = "allow", skip_inner = true },
+            { pattern = "*", permission = "ask" },
+        ]
+    "#,
+    )
+    .unwrap();
+
+    let result = analyze_command(
+        "ssh starrocks-pilot 'systemctl start foo'",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    // skip_inner bypasses inner command analysis; host rule says allow
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_ssh_no_skip_inner_analyzes_dangerous_command() {
+    // Without skip_inner the inner command is analyzed; systemctl start
+    // is not in the allow list so it should not be allowed.
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["ssh"]
+        permission = "check_host"
+        reason = "remote connection"
+        host_rules = [
+            { pattern = "other-host", permission = "allow" },
+            { pattern = "*", permission = "ask" },
+        ]
+    "#,
+    )
+    .unwrap();
+
+    let result = analyze_command(
+        "ssh other-host 'systemctl start foo'",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    // Inner command "systemctl start" is not allowed by any rule → ask
+    assert_ne!(result.permission, Permission::Allow);
+}

@@ -276,6 +276,11 @@ fn check_wrapper_inner_command(
     wrapper: &str,
     host: Option<&str>,
 ) -> PermissionResult {
+    if let Some(host) = host {
+        if config.host_skips_inner(&cmd.name, &cmd.args, host) {
+            return wrapper_host_result(cmd, config, Some(host), ctx);
+        }
+    }
     let inner_result = analyze_wrapper_inner(
         inner,
         wrapper,

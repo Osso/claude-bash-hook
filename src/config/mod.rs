@@ -200,6 +200,9 @@ pub struct HostRule {
     pub pattern: String,
     /// Permission for matching hosts
     pub permission: String,
+    /// When true, skip inner command analysis — trust all commands on this host
+    #[serde(default)]
+    pub skip_inner: bool,
 }
 
 /// Wrapper command configuration

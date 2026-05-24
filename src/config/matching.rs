@@ -62,6 +62,38 @@ impl Config {
         }
     }
 
+    /// Check if a host matches a skip_inner host rule for the given command.
+    /// Returns true when the matched host rule has `skip_inner = true`.
+    pub fn host_skips_inner(&self, name: &str, args: &[String], host: &str) -> bool {
+        for rule in &self.rules {
+            let is_check_host = rule.permission == "check_host"
+                || rule
+                    .subagent_permission
+                    .as_deref()
+                    .is_some_and(|p| p == "check_host")
+                || rule
+                    .edit_mode_permission
+                    .as_deref()
+                    .is_some_and(|p| p == "check_host");
+            if !is_check_host {
+                continue;
+            }
+            let matched = rule
+                .commands
+                .iter()
+                .any(|pattern| self.rule_matches_host_pattern(rule, pattern, name, args));
+            if !matched {
+                continue;
+            }
+            for host_rule in &rule.host_rules {
+                if glob_match(&host_rule.pattern, host) {
+                    return host_rule.skip_inner;
+                }
+            }
+        }
+        false
+    }
+
     /// Resolve default permission, reason, and suggestion based on context
     fn resolve_default<'a>(
         &'a self,

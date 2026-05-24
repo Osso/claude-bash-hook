@@ -328,6 +328,14 @@ permission = "deny"
 reason = "disk operations"
 
 # SSH with host rules
+# Use skip_inner = true on a host rule to skip inner command analysis entirely
+# and return the host-level permission directly. Useful for trusted hosts where
+# all commands should be allowed regardless of what they are.
+# Example:
+#   host_rules = [
+#       { pattern = "deploy-server", permission = "allow", skip_inner = true },
+#       { pattern = "*", permission = "ask" },
+#   ]
 [[rules]]
 commands = ["ssh", "scp", "rsync"]
 permission = "check_host"
