@@ -1,6 +1,6 @@
 //! rm command special handling
 //!
-//! Auto-allows rm for files under /tmp/ or the project directory
+//! Auto-allows rm for files under /tmp/, ~/.cache/, or the project directory
 
 use crate::analyzer::Command;
 use crate::config::{Config, Permission, PermissionResult};
@@ -61,7 +61,7 @@ pub fn check_rm(
 
     Some(PermissionResult {
         permission: Permission::Allow,
-        reason: "rm in /tmp or project dir".to_string(),
+        reason: "rm in /tmp, ~/.cache, or project dir".to_string(),
         suggestion: None,
     })
 }
@@ -102,12 +102,17 @@ fn resolve_existing_parent(path: &str) -> Option<String> {
         .and_then(resolve_path)
 }
 
-/// Check if a resolved path is under /tmp/ or project dir
+/// Directories whose contents (but not the directory itself) are safe to delete
+const ALLOWED_PREFIXES: &[&str] = &["/tmp/", "/home/osso/.cache/"];
+
+/// Check if a resolved path is under an allowed dir or the project dir
 fn is_under_allowed_dir(resolved: &str, initial_cwd: Option<&str>) -> bool {
-    // Allow /tmp/
-    if resolved.starts_with("/tmp/") {
-        let after = &resolved[5..];
-        if !after.is_empty() && !after.chars().all(|c| c == '/') {
+    // Allow files under a known scratch/cache directory (but not the dir itself)
+    for prefix in ALLOWED_PREFIXES {
+        if let Some(after) = resolved.strip_prefix(prefix)
+            && !after.is_empty()
+            && !after.chars().all(|c| c == '/')
+        {
             return true;
         }
     }
@@ -170,6 +175,20 @@ mod tests {
         let cmd = make_cmd(&["-rf", "/tmp/mydir/subdir"]);
         let result = check_rm(&cmd, &Config::default(), None, None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_rm_cache_file() {
+        let cmd = make_cmd(&["/home/osso/.cache/some/file"]);
+        let result = check_rm(&cmd, &Config::default(), None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_rm_cache_itself_not_allowed() {
+        let cmd = make_cmd(&["-rf", "/home/osso/.cache"]);
+        let result = check_rm(&cmd, &Config::default(), None, None);
+        assert!(result.is_none()); // passthrough
     }
 
     #[test]

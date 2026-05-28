@@ -32,9 +32,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
 cargo build --release
 ```
 
-Binary: `target/release/claude-bash-hook`
-
-Symlinked to: `/home/osso/bin/claude-bash-hook`
+Deploy: `bash deploy.sh` (installs both binaries to `~/bin/` via `cargo install`)
 
 ## Config
 
