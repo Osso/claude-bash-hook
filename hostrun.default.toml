@@ -1,0 +1,12 @@
+# Hostrun operation policy.
+#
+# Add rules in ~/.config/claude-bash-hook/hostrun.toml, for example:
+#
+# [[rules]]
+# operation = "fs.read"
+# path = "/home/osso/Repos/**"
+# permission = "allow"
+
+[[rules]]
+operation = "http.request"
+permission = "check_network_host"

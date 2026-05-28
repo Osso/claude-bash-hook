@@ -163,8 +163,7 @@ pub fn check_curl(cmd: &Command, config: &Config, ctx: ExecContext) -> Option<Pe
     // Check each host against config rules
     // Return the most restrictive result (or first non-passthrough)
     for host in &hosts {
-        let (result, wildcard_matched) =
-            config.check_command_with_host_flagged("curl", &cmd.args, Some(host), ctx);
+        let (result, wildcard_matched) = config.check_network_host_flagged(Some(host), ctx);
         if result.permission == Permission::Passthrough {
             continue;
         }
@@ -187,10 +186,11 @@ fn apply_llm_fallback(
         return result;
     }
 
-    let llm_enabled = config
-        .rules
-        .iter()
-        .any(|r| r.llm_fallback && r.permission == "check_host");
+    let llm_enabled = config.network.llm_fallback
+        || config
+            .rules
+            .iter()
+            .any(|r| r.llm_fallback && r.permission == "check_host");
 
     if !llm_enabled {
         return result;
@@ -318,6 +318,63 @@ mod tests {
         let cmd = make_cmd(&["https://example.com/api"]);
         let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
         assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_curl_uses_network_sidecar_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let network_path = dir.path().join("network.toml");
+
+        std::fs::write(&config_path, r#"default = "passthrough""#).unwrap();
+        std::fs::write(
+            network_path,
+            r#"
+                [[hosts]]
+                pattern = "api.example.com"
+                permission = "allow"
+
+                [[hosts]]
+                pattern = "*"
+                permission = "ask"
+            "#,
+        )
+        .unwrap();
+
+        let config = Config::load(&config_path).unwrap();
+        let cmd = make_cmd(&["https://api.example.com/v1"]);
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
+
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_curl_falls_back_to_legacy_inline_rules_without_network_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        std::fs::write(
+            &config_path,
+            r#"
+                default = "passthrough"
+
+                [[rules]]
+                commands = ["curl"]
+                permission = "check_host"
+                reason = "curl"
+                host_rules = [
+                    { pattern = "legacy.example.com", permission = "allow" },
+                    { pattern = "*", permission = "ask" },
+                ]
+            "#,
+        )
+        .unwrap();
+
+        let config = Config::load(&config_path).unwrap();
+        let cmd = make_cmd(&["https://legacy.example.com/v1"]);
+        let result = check_curl(&cmd, &config, ExecContext::default()).unwrap();
+
+        assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]

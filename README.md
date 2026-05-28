@@ -30,9 +30,11 @@ cp target/release/claude-bash-hook ~/.local/bin/
 ```bash
 mkdir -p ~/.config/claude-bash-hook
 cp config.default.toml ~/.config/claude-bash-hook/config.toml
+cp network.default.toml ~/.config/claude-bash-hook/network.toml
+cp hostrun.default.toml ~/.config/claude-bash-hook/hostrun.toml
 ```
 
-Edit `config.toml` to match your workflow. The example config has sensible defaults.
+Edit `config.toml`, `network.toml`, and `hostrun.toml` to match your workflow.
 
 ### 4. Register the hook
 

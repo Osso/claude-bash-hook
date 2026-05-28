@@ -5,8 +5,11 @@ use std::path::Path;
 
 /// Embedded default configuration
 const DEFAULT_CONFIG: &str = include_str!("../../config.default.toml");
+const DEFAULT_NETWORK_CONFIG: &str = include_str!("../../network.default.toml");
+const DEFAULT_HOSTRUN_CONFIG: &str = include_str!("../../hostrun.default.toml");
 
 mod matching;
+mod network;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -121,6 +124,14 @@ pub struct Config {
     /// Command aliases — rewrite command names before analysis
     #[serde(default)]
     pub aliases: Vec<AliasConfig>,
+
+    /// Shared network host policy, loaded from network.toml next to config.toml.
+    #[serde(skip)]
+    pub network: NetworkConfig,
+
+    /// Hostrun operation policy, loaded from hostrun.toml next to config.toml.
+    #[serde(skip)]
+    pub hostrun: HostrunConfig,
 }
 
 fn default_permission() -> String {
@@ -203,6 +214,68 @@ pub struct HostRule {
     /// When true, skip inner command analysis — trust all commands on this host
     #[serde(default)]
     pub skip_inner: bool,
+}
+
+/// Shared network host policy used by curl and Hostrun HTTP operations.
+#[derive(Debug, Default, Deserialize)]
+pub struct NetworkConfig {
+    /// Host rules applied in order.
+    #[serde(default)]
+    pub hosts: Vec<HostRule>,
+
+    /// When true and a host matches only the `*` wildcard, query an LLM to
+    /// decide if the host is safe, auto-allowing if it says SAFE.
+    #[serde(default)]
+    pub llm_fallback: bool,
+}
+
+/// Hostrun operation policy.
+#[derive(Debug, Default, Deserialize)]
+pub struct HostrunConfig {
+    /// Operation rules applied in order.
+    #[serde(default)]
+    pub rules: Vec<HostrunRule>,
+}
+
+impl HostrunConfig {
+    fn validate(&self) -> Result<(), String> {
+        for rule in &self.rules {
+            if !is_hostrun_permission(&rule.permission) {
+                return Err(format!(
+                    "Hostrun {} rule has invalid permission {}",
+                    rule.operation, rule.permission
+                ));
+            }
+            if rule.operation.starts_with("fs.") && rule.path.is_none() {
+                return Err(format!(
+                    "Hostrun {} rule requires a path pattern",
+                    rule.operation
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_hostrun_permission(permission: &str) -> bool {
+    matches!(
+        permission,
+        "allow" | "ask" | "deny" | "passthrough" | "check_network_host"
+    )
+}
+
+/// Hostrun operation rule.
+#[derive(Debug, Deserialize)]
+pub struct HostrunRule {
+    /// Hostrun operation, e.g. "fs.read" or "http.request".
+    pub operation: String,
+
+    /// Path glob for filesystem operations.
+    #[serde(default)]
+    pub path: Option<String>,
+
+    /// Permission for matching operations.
+    pub permission: String,
 }
 
 /// Wrapper command configuration
@@ -377,7 +450,10 @@ impl Config {
         let content =
             std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {}", e))?;
 
-        toml::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))
+        let mut config: Self =
+            toml::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
+        config.load_sidecars(path.parent().unwrap_or_else(|| Path::new(".")))?;
+        Ok(config)
     }
 
     /// Load from default location or return default config
@@ -395,6 +471,15 @@ impl Config {
         }
 
         Self::default()
+    }
+
+    fn load_sidecars(&mut self, config_dir: &Path) -> Result<(), String> {
+        self.network =
+            load_optional_sidecar(&config_dir.join("network.toml"), "network")?.unwrap_or_default();
+        self.hostrun =
+            load_optional_sidecar(&config_dir.join("hostrun.toml"), "hostrun")?.unwrap_or_default();
+        self.hostrun.validate()?;
+        Ok(())
     }
 
     /// Get wrapper config by command name
@@ -499,7 +584,32 @@ fn path_prefix(path: &str) -> String {
 
 impl Default for Config {
     fn default() -> Self {
-        // Use embedded default config
-        toml::from_str(DEFAULT_CONFIG).expect("Embedded default config is invalid")
+        let mut config: Self =
+            toml::from_str(DEFAULT_CONFIG).expect("Embedded default config is invalid");
+        config.network =
+            toml::from_str(DEFAULT_NETWORK_CONFIG).expect("Embedded network config is invalid");
+        config.hostrun =
+            toml::from_str(DEFAULT_HOSTRUN_CONFIG).expect("Embedded Hostrun config is invalid");
+        config
+            .hostrun
+            .validate()
+            .expect("Embedded Hostrun config is invalid");
+        config
     }
+}
+
+fn load_optional_sidecar<T>(path: &Path, name: &str) -> Result<Option<T>, String>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {} config: {}", name, e))?;
+
+    toml::from_str(&content)
+        .map(Some)
+        .map_err(|e| format!("Failed to parse {} config: {}", name, e))
 }

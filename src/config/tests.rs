@@ -18,6 +18,93 @@ fn test_config() -> Config {
 }
 
 #[test]
+fn test_load_reads_network_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let network_path = dir.path().join("network.toml");
+
+    fs::write(&config_path, r#"default = "passthrough""#).unwrap();
+    fs::write(
+        network_path,
+        r#"
+            [[hosts]]
+            pattern = "api.example.com"
+            permission = "allow"
+
+            [[hosts]]
+            pattern = "*"
+            permission = "ask"
+        "#,
+    )
+    .unwrap();
+
+    let config = Config::load(&config_path).unwrap();
+    let (result, wildcard_matched) =
+        config.check_network_host_flagged(Some("api.example.com"), ExecContext::default());
+
+    assert_eq!(result.permission, Permission::Allow);
+    assert!(!wildcard_matched);
+
+    let (result, wildcard_matched) =
+        config.check_network_host_flagged(Some("unknown.example"), ExecContext::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+    assert!(wildcard_matched);
+}
+
+#[test]
+fn test_load_reads_hostrun_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let hostrun_path = dir.path().join("hostrun.toml");
+
+    fs::write(&config_path, r#"default = "passthrough""#).unwrap();
+    fs::write(
+        hostrun_path,
+        r#"
+            [[rules]]
+            operation = "fs.read"
+            path = "/home/osso/Repos/**"
+            permission = "allow"
+        "#,
+    )
+    .unwrap();
+
+    let config = Config::load(&config_path).unwrap();
+
+    assert_eq!(config.hostrun.rules.len(), 1);
+    assert_eq!(config.hostrun.rules[0].operation, "fs.read");
+    assert_eq!(
+        config.hostrun.rules[0].path.as_deref(),
+        Some("/home/osso/Repos/**")
+    );
+    assert_eq!(config.hostrun.rules[0].permission, "allow");
+}
+
+#[test]
+fn test_hostrun_fs_rule_requires_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let hostrun_path = dir.path().join("hostrun.toml");
+
+    fs::write(&config_path, r#"default = "passthrough""#).unwrap();
+    fs::write(
+        hostrun_path,
+        r#"
+            [[rules]]
+            operation = "fs.read"
+            permission = "allow"
+        "#,
+    )
+    .unwrap();
+
+    let err = Config::load(&config_path).unwrap_err();
+
+    assert!(err.contains("fs.read"));
+    assert!(err.contains("path"));
+}
+
+#[test]
 fn test_simple_match() {
     let config = test_config();
     let result = config.check_command("ls", &["-la".into()]);

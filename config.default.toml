@@ -344,23 +344,6 @@ host_rules = [
     { pattern = "*", permission = "allow" },
 ]
 
-# Curl with host rules (localhost always allowed)
-[[rules]]
-commands = ["curl"]
-permission = "check_host"
-reason = "curl"
-host_rules = [
-    { pattern = "localhost", permission = "allow" },
-    { pattern = "*.localhost", permission = "allow" },
-    { pattern = "127.0.0.1", permission = "allow" },
-    { pattern = "127.*", permission = "allow" },
-    { pattern = "::1", permission = "allow" },
-    { pattern = "[::1]", permission = "allow" },
-    { pattern = "0.0.0.0", permission = "allow" },
-    { pattern = "claude-agent.globalcomixdev.com", permission = "allow" },
-    { pattern = "*", permission = "ask" },
-]
-
 # Wrapper configurations - these commands are "unwrapped" to analyze the inner command
 # Simple wrappers are config-driven (skip options, run inner command)
 # Complex wrappers have special handling: ssh, scp, rsync, env, kubectl exec, timeout

@@ -1,0 +1,40 @@
+# Shared network host policy used by curl and Hostrun HTTP operations.
+# localhost is allowed by default; unknown hosts ask.
+
+llm_fallback = false
+
+[[hosts]]
+pattern = "localhost"
+permission = "allow"
+
+[[hosts]]
+pattern = "*.localhost"
+permission = "allow"
+
+[[hosts]]
+pattern = "127.0.0.1"
+permission = "allow"
+
+[[hosts]]
+pattern = "127.*"
+permission = "allow"
+
+[[hosts]]
+pattern = "::1"
+permission = "allow"
+
+[[hosts]]
+pattern = "[::1]"
+permission = "allow"
+
+[[hosts]]
+pattern = "0.0.0.0"
+permission = "allow"
+
+[[hosts]]
+pattern = "claude-agent.globalcomixdev.com"
+permission = "allow"
+
+[[hosts]]
+pattern = "*"
+permission = "ask"
