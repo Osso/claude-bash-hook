@@ -398,8 +398,15 @@ fn test_build_codex_hook_output_deny_shape_matches_codex_schema() {
 }
 
 #[test]
-fn test_build_codex_hook_output_returns_none_for_bare_allow() {
-    assert!(build_codex_hook_output("allow", "safe command", None, false).is_none());
+fn test_build_codex_hook_output_emits_bare_allow() {
+    let output = build_codex_hook_output("allow", "safe command", None, false)
+        .expect("bare allow should build for codex");
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert_eq!(
+        output["hookSpecificOutput"]["permissionDecisionReason"],
+        "safe command"
+    );
+    assert!(output["hookSpecificOutput"].get("updatedInput").is_none());
 }
 
 #[test]
@@ -430,14 +437,17 @@ fn test_build_codex_hook_output_substitutes_reason_when_blank() {
 
 #[test]
 fn test_build_codex_hook_output_drops_allow_rewrite_without_support() {
+    let output = build_codex_hook_output(
+        "allow",
+        "alias rewrite",
+        Some(json!({ "command": "rtk git status" })),
+        false,
+    )
+    .expect("allow should still build without rewrite support");
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
     assert!(
-        build_codex_hook_output(
-            "allow",
-            "alias rewrite",
-            Some(json!({ "command": "rtk git status" })),
-            false,
-        )
-        .is_none()
+        output["hookSpecificOutput"].get("updatedInput").is_none(),
+        "rewrite must be dropped when the runtime lacks updatedInput support"
     );
 }
 
@@ -469,15 +479,16 @@ fn test_serialize_codex_hook_output_deny_only_emits_supported_fields() {
 
 #[test]
 fn test_serialize_codex_hook_output_drops_allow_rewrite_without_support() {
-    assert!(
-        serialize_codex_hook_output(
-            "allow",
-            "alias rewrite",
-            Some(json!({ "command": "rtk git status" })),
-            false,
-        )
-        .is_none()
-    );
+    let json = serialize_codex_hook_output(
+        "allow",
+        "alias rewrite",
+        Some(json!({ "command": "rtk git status" })),
+        false,
+    )
+    .expect("allow should still serialize without rewrite support");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "allow");
+    assert!(value["hookSpecificOutput"].get("updatedInput").is_none());
 }
 
 #[test]
@@ -498,8 +509,15 @@ fn test_serialize_codex_hook_output_keeps_allow_rewrite_with_support() {
 }
 
 #[test]
-fn test_serialize_codex_hook_output_drops_bare_allow_but_keeps_ask() {
-    assert!(serialize_codex_hook_output("allow", "safe", None, false).is_none());
+fn test_serialize_codex_hook_output_emits_bare_allow_and_ask() {
+    let allow = serialize_codex_hook_output("allow", "safe", None, false)
+        .expect("bare allow should serialize");
+    let allow_value: serde_json::Value =
+        serde_json::from_str(&allow).expect("valid output json");
+    assert_eq!(
+        allow_value["hookSpecificOutput"]["permissionDecision"],
+        "allow"
+    );
     let json = serialize_codex_hook_output("ask", "needs review", None, false)
         .expect("ask should serialize");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid output json");

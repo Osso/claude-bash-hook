@@ -253,8 +253,10 @@ fn serialize_hook_output(
     serde_json::to_string(&build_hook_output(decision, reason, updated_input)).ok()
 }
 
-/// Build the codex-shaped output. Returns None when there is nothing to emit:
-/// - `allow` without an `updatedInput` rewrite (no-op against codex's own flow)
+/// Build the codex-shaped output. Codex honors `permissionDecision: allow` to
+/// auto-approve (skipping its own approval flow), `ask` to force a prompt, and
+/// legacy `block` to deny. `passthrough` and unknown decisions emit nothing so
+/// Codex falls back to its own policy.
 fn build_codex_hook_output(
     decision: &str,
     reason: &str,
@@ -277,11 +279,11 @@ fn build_codex_hook_output(
         }
         "ask" => serde_json::to_value(build_hook_output("ask", reason, updated_input)).ok(),
         "allow" => {
-            if supports_updated_input && updated_input.is_some() {
-                serde_json::to_value(build_hook_output("allow", reason, updated_input)).ok()
-            } else {
-                None
-            }
+            // Emit a positive allow so Codex skips its own approval prompt.
+            // Attach the command rewrite only when the runtime advertises
+            // updatedInput support; otherwise send a bare allow.
+            let rewrite = updated_input.filter(|_| supports_updated_input);
+            serde_json::to_value(build_hook_output("allow", reason, rewrite)).ok()
         }
         _ => None,
     }
@@ -302,10 +304,9 @@ fn serialize_codex_hook_output(
     .ok()
 }
 
-/// Output a hook decision, optionally with a rewritten command. Codex currently
-/// accepts deny + reason and ask + optional rewrite. Bare allow is dropped on
-/// the Codex path so the hook never aborts a command with an unsupported
-/// approval shape.
+/// Output a hook decision, optionally with a rewritten command. Codex accepts
+/// allow (auto-approve), ask (+ optional rewrite), and legacy block (deny);
+/// rewrites are attached only when the runtime advertises updatedInput support.
 fn output_decision(
     decision: &str,
     reason: &str,
