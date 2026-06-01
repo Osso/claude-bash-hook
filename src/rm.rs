@@ -102,13 +102,16 @@ fn resolve_existing_parent(path: &str) -> Option<String> {
         .and_then(resolve_path)
 }
 
-/// Directories whose contents (but not the directory itself) are safe to delete
+/// Directories whose contents are safe to delete.
 const ALLOWED_PREFIXES: &[&str] = &["/tmp/", "/home/osso/.cache/"];
 
 /// Check if a resolved path is under an allowed dir or the project dir
 fn is_under_allowed_dir(resolved: &str, initial_cwd: Option<&str>) -> bool {
-    // Allow files under a known scratch/cache directory (but not the dir itself)
+    // Allow files under a known scratch/cache directory.
     for prefix in ALLOWED_PREFIXES {
+        if *prefix == "/home/osso/.cache/" && resolved == "/home/osso/.cache" {
+            return true;
+        }
         if let Some(after) = resolved.strip_prefix(prefix)
             && !after.is_empty()
             && !after.chars().all(|c| c == '/')
@@ -188,7 +191,14 @@ mod tests {
     fn test_rm_cache_itself_not_allowed() {
         let cmd = make_cmd(&["-rf", "/home/osso/.cache"]);
         let result = check_rm(&cmd, &Config::default(), None, None);
-        assert!(result.is_none()); // passthrough
+        assert_eq!(result.unwrap().permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_rm_cache_root_allowed() {
+        let cmd = make_cmd(&["/home/osso/.cache"]);
+        let result = check_rm(&cmd, &Config::default(), None, None).unwrap();
+        assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
