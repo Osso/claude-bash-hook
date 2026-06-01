@@ -197,7 +197,7 @@ fn check_single_command(
     {
         return result;
     }
-    if let Some(result) = check_inplace_edit(cmd) {
+    if !is_remote && let Some(result) = check_inplace_edit(cmd) {
         return result;
     }
     if let Some(result) = check_cwd_rules(cmd, config, ctx, virtual_cwd, initial_cwd, is_remote) {

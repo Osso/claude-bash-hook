@@ -799,3 +799,17 @@ fn test_ssh_no_skip_inner_analyzes_dangerous_command() {
     // Inner command "systemctl start" is not allowed by any rule → ask
     assert_ne!(result.permission, Permission::Allow);
 }
+
+#[test]
+fn test_ssh_remote_perl_inplace_edit_is_not_local_edit_denial() {
+    let config = test_config();
+    let command = concat!(
+        "ssh root@192.168.2.1 perl -0pi -e ",
+        "'s#/etc/crowdsec/online_api_credentials.yaml#/tmp/crowdsec-capi-test-creds.yaml#' ",
+        "/tmp/crowdsec-capi-test.yaml"
+    );
+    let result = analyze_command(command, &config, ExecContext::default(), None);
+
+    assert_ne!(result.permission, Permission::Deny);
+    assert!(!result.reason.contains("use Edit tool"));
+}
