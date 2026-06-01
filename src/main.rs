@@ -142,6 +142,11 @@ fn edits_allowed(mode: Option<&str>) -> bool {
     matches!(mode, Some("acceptEdits") | Some("bypassPermissions"))
 }
 
+/// Check if the session is in bypassPermissions ("yolo") mode
+fn bypass_mode(mode: Option<&str>) -> bool {
+    mode == Some("bypassPermissions")
+}
+
 pub(crate) fn apply_access_mode_permission(
     permission: Permission,
     access_mode: Option<&str>,
@@ -214,9 +219,9 @@ struct HookSpecificOutput {
 }
 
 /// Codex parses legacy `decision:block` and Claude-shaped
-/// `hookSpecificOutput.permissionDecision:ask`. Allow stays silent here because
-/// older deployed Codex builds reject both Claude `permissionDecision:allow`
-/// and legacy `decision:approve`.
+/// `hookSpecificOutput.permissionDecision:ask`. Emit `allow` for Codex too so
+/// approved commands auto-pass instead of falling back to a separate approval
+/// path.
 #[derive(Debug, Serialize)]
 struct CodexHookOutput {
     decision: String,
@@ -437,6 +442,7 @@ fn analyze_and_resolve(
             .session_id
             .as_deref()
             .is_some_and(|sid| subagent_tracker::has_active_subagents(sid)),
+        bypass: bypass_mode(hook_input.permission_mode.as_deref()),
     };
     let access_mode = hook_input.access_mode().map(str::to_string);
     let result = if is_nushell {

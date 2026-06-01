@@ -47,6 +47,8 @@ pub struct ExecContext {
     pub edit_mode: bool,
     /// Whether the command comes from a subagent (Task() call)
     pub is_subagent: bool,
+    /// Whether the session is in bypassPermissions ("yolo") mode
+    pub bypass: bool,
 }
 
 /// Main configuration structure

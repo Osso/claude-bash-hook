@@ -127,6 +127,7 @@ fn test_subagent_permission_priority_over_edit_mode() {
         ExecContext {
             edit_mode: true,
             is_subagent: true,
+            ..Default::default()
         },
     );
     assert_eq!(result.permission, Permission::Allow);

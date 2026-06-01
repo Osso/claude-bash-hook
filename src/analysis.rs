@@ -436,6 +436,29 @@ fn check_scripting(
     initial_cwd: Option<&str>,
     full_command: Option<&str>,
 ) -> Option<PermissionResult> {
+    let result = check_scripting_inner(cmd, config, ctx, virtual_cwd, initial_cwd, full_command)?;
+    // In bypassPermissions ("yolo") mode the user has opted into trusting all
+    // inline scripts, so never let script content analysis block them.
+    Some(allow_in_bypass(result, ctx))
+}
+
+/// In bypass mode, downgrade any ask/deny script verdict to allow.
+fn allow_in_bypass(mut result: PermissionResult, ctx: ExecContext) -> PermissionResult {
+    if ctx.bypass && result.permission != Permission::Allow {
+        result.permission = Permission::Allow;
+        result.reason = format!("bypassPermissions: {}", result.reason);
+    }
+    result
+}
+
+fn check_scripting_inner(
+    cmd: &analyzer::Command,
+    config: &Config,
+    ctx: ExecContext,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    full_command: Option<&str>,
+) -> Option<PermissionResult> {
     if cmd.name == "php" {
         if let Some(result) = scripts::php::check_php_script(cmd) {
             return Some(result);

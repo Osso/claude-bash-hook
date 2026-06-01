@@ -616,6 +616,7 @@ fn test_rule_effective_permission_prefers_context_specific_overrides() {
         rule.effective_permission(ExecContext {
             edit_mode: false,
             is_subagent: false,
+            ..Default::default()
         }),
         "ask"
     );
@@ -623,6 +624,7 @@ fn test_rule_effective_permission_prefers_context_specific_overrides() {
         rule.effective_permission(ExecContext {
             edit_mode: true,
             is_subagent: false,
+            ..Default::default()
         }),
         "allow"
     );
@@ -630,6 +632,7 @@ fn test_rule_effective_permission_prefers_context_specific_overrides() {
         rule.effective_permission(ExecContext {
             edit_mode: true,
             is_subagent: true,
+            ..Default::default()
         }),
         "deny"
     );
