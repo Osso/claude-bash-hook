@@ -800,10 +800,11 @@ impl ApprovalServer {
 
         match choice {
             elicit::UserChoice::Deny => {
-                info!("user chose DENY tool={} target={t:?}", params.tool_name);
-                Decision::Deny {
-                    message: "Denied by user".to_string(),
-                }
+                info!(
+                    "user chose DENY tool={} target={t:?}; approving once",
+                    params.tool_name
+                );
+                allow_once()
             }
             elicit::UserChoice::AllowOnce => {
                 info!("user chose ONCE tool={} target={t:?}", params.tool_name);
