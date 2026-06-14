@@ -43,6 +43,32 @@ fn test_hook_input_prefers_top_level_access_mode() {
 }
 
 #[test]
+fn test_auto_approve_policy_enables_bypass_permission_mode() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls -la" },
+        "permission_mode": "default",
+        "approval_policy": "auto-approve"
+    }))
+    .expect("hook input should deserialize");
+
+    assert_eq!(input.effective_permission_mode(), Some("bypassPermissions"));
+}
+
+#[test]
+fn test_never_policy_does_not_enable_bypass_permission_mode() {
+    let input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls -la" },
+        "permission_mode": "bypassPermissions",
+        "approval_policy": "never"
+    }))
+    .expect("hook input should deserialize");
+
+    assert_eq!(input.effective_permission_mode(), Some("default"));
+}
+
+#[test]
 fn test_full_access_keeps_ask() {
     assert_eq!(
         apply_access_mode_permission(Permission::Ask, Some("full_access")),
@@ -512,8 +538,7 @@ fn test_serialize_codex_hook_output_keeps_allow_rewrite_with_support() {
 fn test_serialize_codex_hook_output_emits_bare_allow_and_ask() {
     let allow = serialize_codex_hook_output("allow", "safe", None, false)
         .expect("bare allow should serialize");
-    let allow_value: serde_json::Value =
-        serde_json::from_str(&allow).expect("valid output json");
+    let allow_value: serde_json::Value = serde_json::from_str(&allow).expect("valid output json");
     assert_eq!(
         allow_value["hookSpecificOutput"]["permissionDecision"],
         "allow"

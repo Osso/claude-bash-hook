@@ -150,7 +150,7 @@ fn check_main_thread_block(
 }
 
 fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool, is_codex: bool) {
-    let edit_mode = edits_allowed(hook_input.permission_mode.as_deref());
+    let edit_mode = edits_allowed(hook_input.effective_permission_mode());
     let is_dry_run = hook_input.tool_input.dry_run.unwrap_or(false);
     let reason = regex_replace_reason(edit_mode, is_dry_run, is_subagent);
     let permission = if edit_mode || is_dry_run || is_subagent {

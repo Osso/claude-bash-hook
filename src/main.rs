@@ -51,6 +51,9 @@ struct HookInput {
     /// Codex access mode: "full_access", "supervised", etc.
     #[serde(default)]
     access_mode: Option<String>,
+    /// Codex approval policy: "on-request", "never", "auto-approve", etc.
+    #[serde(default)]
+    approval_policy: Option<String>,
     /// Working directory where Claude Code session started
     #[serde(default)]
     cwd: Option<String>,
@@ -95,6 +98,14 @@ impl HookInput {
             .hook_event
             .as_ref()
             .and_then(|event| event.access_mode.as_deref()))
+    }
+
+    pub(crate) fn effective_permission_mode(&self) -> Option<&str> {
+        match self.approval_policy.as_deref() {
+            Some("auto-approve") | Some("bypass-permissions") => Some("bypassPermissions"),
+            Some("never") | Some("no-prompts") => Some("default"),
+            _ => self.permission_mode.as_deref(),
+        }
     }
 
     /// Detect Codex from explicit mode fields and Codex-only hook payload fields.
@@ -437,12 +448,12 @@ fn analyze_and_resolve(
     is_nushell: bool,
 ) -> Option<PermissionResult> {
     let ctx = ExecContext {
-        edit_mode: edits_allowed(hook_input.permission_mode.as_deref()),
+        edit_mode: edits_allowed(hook_input.effective_permission_mode()),
         is_subagent: hook_input
             .session_id
             .as_deref()
             .is_some_and(|sid| subagent_tracker::has_active_subagents(sid)),
-        bypass: bypass_mode(hook_input.permission_mode.as_deref()),
+        bypass: bypass_mode(hook_input.effective_permission_mode()),
     };
     let access_mode = hook_input.access_mode().map(str::to_string);
     let result = if is_nushell {
