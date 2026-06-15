@@ -2,6 +2,7 @@
 //!
 //! Each language has its own module that checks if inline scripts are read-only.
 
+pub mod awk;
 pub mod lua;
 pub mod node;
 pub mod perl;

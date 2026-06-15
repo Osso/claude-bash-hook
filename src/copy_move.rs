@@ -75,7 +75,20 @@ fn is_compression_command(command: &str) -> bool {
 pub fn is_write_command(command: &str) -> bool {
     matches!(
         command,
-        "cp" | "mv" | "install" | "ln" | "mkdir" | "touch" | "chmod" | "chown" | "chgrp"
+        "cp" | "mv"
+            | "install"
+            | "ln"
+            | "mkdir"
+            | "touch"
+            | "chmod"
+            | "chown"
+            | "chgrp"
+            // Read tools / fetchers with an output-file flag.
+            | "wget"
+            | "curl"
+            | "sort"
+            | "shuf"
+            | "uniq"
     ) || is_compression_command(command)
 }
 
@@ -89,8 +102,74 @@ fn write_targets(cmd: &Command) -> Vec<String> {
         // protected glob and are harmless to include.
         "mkdir" | "touch" | "chmod" | "chown" | "chgrp" => all_positional_targets(cmd),
         name if is_compression_command(name) => compression_targets(cmd),
+        // Downloaders/writers: the write target is the value of an output flag.
+        "wget" => option_values(
+            cmd,
+            &["-O", "--output-document", "-P", "--directory-prefix"],
+        ),
+        "curl" => option_values(cmd, &["-o", "--output", "--output-dir"]),
+        "sort" | "shuf" => option_values(cmd, &["-o", "--output"]),
+        // uniq [INPUT [OUTPUT]] — the second positional is the output file.
+        "uniq" => uniq_output_target(cmd),
         _ => Vec::new(),
     }
+}
+
+/// Collect the values of any of `flags`, handling separated (`-o val`),
+/// glued short (`-oval`), and `--long=val` forms.
+fn option_values(cmd: &Command, flags: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut iter = cmd.args.iter();
+    while let Some(arg) = iter.next() {
+        if flags.contains(&arg.as_str()) {
+            if let Some(val) = iter.next() {
+                values.push(val.clone());
+            }
+            continue;
+        }
+        for flag in flags {
+            let Some(rest) = arg.strip_prefix(flag) else {
+                continue;
+            };
+            if flag.starts_with("--") {
+                if let Some(val) = rest.strip_prefix('=') {
+                    values.push(val.to_string());
+                }
+            } else if !rest.is_empty() {
+                values.push(rest.to_string()); // glued short: -oval
+            }
+            break;
+        }
+    }
+    values
+}
+
+/// The output file of a `uniq` invocation: the second positional argument
+/// (the first is the input, a read).
+fn uniq_output_target(cmd: &Command) -> Vec<String> {
+    const OPTS_WITH_ARG: &[&str] = &[
+        "-f",
+        "--skip-fields",
+        "-s",
+        "--skip-chars",
+        "-w",
+        "--check-chars",
+        "--group",
+        "--all-repeated",
+    ];
+    let mut positionals = Vec::new();
+    let mut iter = cmd.args.iter();
+    while let Some(arg) = iter.next() {
+        if OPTS_WITH_ARG.contains(&arg.as_str()) {
+            iter.next();
+            continue;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            continue;
+        }
+        positionals.push(arg.clone());
+    }
+    positionals.into_iter().nth(1).into_iter().collect()
 }
 
 /// Targets of a compression command. The named files are compressed/decompressed
@@ -465,10 +544,81 @@ mod tests {
     }
 
     #[test]
+    fn test_wget_output_document_asks() {
+        let cmd = make_cmd("wget", &["-O", "/usr/bin/x", "http://e.com/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_wget_directory_prefix_asks() {
+        let cmd = make_cmd("wget", &["-P", "/usr/bin", "http://e.com/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_wget_no_output_flag_unprotected() {
+        let cmd = make_cmd("wget", &["http://e.com/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_curl_output_asks() {
+        let cmd = make_cmd("curl", &["-o", "/usr/bin/x", "http://e.com/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_curl_output_eq_form_asks() {
+        let cmd = make_cmd("curl", &["--output=/usr/bin/x", "http://e.com/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_sort_output_asks() {
+        let cmd = make_cmd("sort", &["-o", "/usr/bin/x", "in"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_sort_no_output_unprotected() {
+        let cmd = make_cmd("sort", &["/usr/bin/in"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none()); // reading the file is fine
+    }
+
+    #[test]
+    fn test_shuf_output_glued_asks() {
+        let cmd = make_cmd("shuf", &["-o/usr/bin/x", "in"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_uniq_output_positional_asks() {
+        let cmd = make_cmd("uniq", &["/home/me/in", "/usr/bin/out"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_uniq_input_only_unprotected() {
+        // Reading a protected file (single positional) is fine.
+        let cmd = make_cmd("uniq", &["/usr/bin/in"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_is_write_command() {
         for c in [
             "cp", "mv", "install", "ln", "mkdir", "touch", "chmod", "chown", "chgrp", "gzip",
-            "gunzip", "xz", "zstd",
+            "gunzip", "xz", "zstd", "wget", "curl", "sort", "shuf", "uniq",
         ] {
             assert!(is_write_command(c), "{c} should be a write command");
         }

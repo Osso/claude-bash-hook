@@ -19,6 +19,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
   - perl.rs - Perl via `-e`/`-E` flag (allows read-only ops, asks on open-for-write/unlink/system/backticks)
   - node.rs - Node via `-e`/`-p`/`--eval`/`--print` (allows read-only ops, asks on fs writes/child_process/network/eval)
   - ruby.rs - Ruby via `-e` flag (allows read-only ops, asks on File writes/system/backticks/network/eval)
+  - awk.rs - AWK/gawk/mawk programs (allows text processing, asks on in-script `> file`/`| cmd`/`getline`/`system()`)
 - **tool_handlers.rs** - Non-bash tool handling (Write, Edit, regex-replace) with main thread blocking
 - **sql.rs** - MySQL/MariaDB/SQLite query analysis (allow SELECT, ask for writes)
 - **redis.rs** - Redis command analysis (allow read-only commands like GET/LLEN, ask for writes)
@@ -27,7 +28,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
 - **tar.rs** - Tar extraction path validation
 - **rm.rs** - Delete command path validation
 - **tee.rs** - Tee output path validation
-- **copy_move.rs** - Write-target validation for cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp and compression tools (gzip/gunzip/bzip2/xz/zstd/...). Shell output redirects (`>`, `>>`) are captured in analyzer.rs and checked in analysis.rs
+- **copy_move.rs** - Write-target validation for cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp, compression tools (gzip/gunzip/bzip2/xz/zstd/...), and output-file flags of fetchers/sorters (wget -O/-P, curl -o, sort/shuf -o, uniq OUTPUT). Shell output redirects (`>`, `>>`) are captured in analyzer.rs and checked in analysis.rs
 - **advice.rs** - Optional AI-powered advice for permission decisions
 
 ## Build

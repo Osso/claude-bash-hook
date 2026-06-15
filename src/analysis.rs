@@ -523,6 +523,11 @@ fn check_scripting_inner(
             return Some(result);
         }
     }
+    if matches!(cmd.name.as_str(), "awk" | "gawk" | "mawk") {
+        if let Some(result) = scripts::awk::check_awk_script(cmd) {
+            return Some(result);
+        }
+    }
     if cmd.name.starts_with("python") {
         if let Some(result) = scripts::python::check_python_script(cmd, full_command, initial_cwd) {
             return Some(result);
