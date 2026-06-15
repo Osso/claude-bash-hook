@@ -813,3 +813,107 @@ fn test_ssh_remote_perl_inplace_edit_is_not_local_edit_denial() {
     assert_ne!(result.permission, Permission::Deny);
     assert!(!result.reason.contains("use Edit tool"));
 }
+
+// Write-protected path guards (ask_write_paths) — end to end.
+
+fn write_guard_config() -> Config {
+    toml::from_str(
+        r#"
+default = "passthrough"
+ask_write_paths = ["/usr/*", "/etc/*"]
+
+[[rules]]
+commands = ["cp", "mv", "mkdir", "touch", "chmod", "chown", "ln", "cat", "echo"]
+permission = "allow"
+reason = "test allow"
+
+[[wrappers]]
+command = "sudo"
+opts_with_args = ["-u", "-g"]
+"#,
+    )
+    .expect("config")
+}
+
+#[test]
+fn test_redirect_into_protected_asks() {
+    let config = write_guard_config();
+    let result = analyze_command(
+        "echo hi > /usr/bin/foo",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Ask);
+    assert!(result.reason.contains("redirect writes to protected path"));
+}
+
+#[test]
+fn test_redirect_append_into_protected_asks() {
+    let config = write_guard_config();
+    let result = analyze_command(
+        "echo hi >> /etc/hosts",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_redirect_into_tmp_allowed() {
+    let config = write_guard_config();
+    let result = analyze_command("echo hi > /tmp/foo", &config, ExecContext::default(), None);
+    assert_ne!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_cp_into_protected_asks_despite_allow_rule() {
+    let config = write_guard_config();
+    let result = analyze_command("cp a /usr/bin/b", &config, ExecContext::default(), None);
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_mkdir_into_protected_asks() {
+    let config = write_guard_config();
+    let result = analyze_command(
+        "mkdir -p /usr/lib/foo",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_chmod_protected_asks() {
+    let config = write_guard_config();
+    let result = analyze_command(
+        "chmod 755 /usr/bin/foo",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_sudo_tee_into_protected_asks() {
+    let config = write_guard_config();
+    let result = analyze_command(
+        "sudo cp x /etc/hosts",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_read_under_protected_not_asked_by_write_guard() {
+    let config = write_guard_config();
+    // Reading from a protected dir must not trip the write guard.
+    let result = analyze_command("cat /usr/bin/foo", &config, ExecContext::default(), None);
+    assert_ne!(result.permission, Permission::Ask);
+}

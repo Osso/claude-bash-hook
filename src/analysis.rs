@@ -68,7 +68,44 @@ pub fn analyze_with_piped_query(
         prev_cmd = Some(cmd);
     }
 
+    if let Some(redirect_result) =
+        check_write_redirects(&analysis.write_redirects, config, initial_cwd)
+    {
+        most_restrictive = Some(merge_restrictive(most_restrictive, redirect_result));
+    }
+
     allow_in_bypass(most_restrictive.unwrap_or_else(default_allow), ctx)
+}
+
+/// Force a prompt when an output redirect (`>`, `>>`) targets a write-protected
+/// path, e.g. `echo x > /usr/bin/foo`.
+fn check_write_redirects(
+    redirects: &[String],
+    config: &Config,
+    initial_cwd: Option<&str>,
+) -> Option<PermissionResult> {
+    for target in redirects {
+        if let Some(abs) = redirect_abs_path(target, initial_cwd)
+            && config.is_write_protected(&abs)
+        {
+            return Some(PermissionResult {
+                permission: Permission::Ask,
+                reason: format!("redirect writes to protected path {}", abs),
+                suggestion: None,
+            });
+        }
+    }
+    None
+}
+
+fn redirect_abs_path(path: &str, initial_cwd: Option<&str>) -> Option<String> {
+    if path.is_empty() || path.contains('\0') || path.contains('\n') {
+        return None;
+    }
+    if std::path::Path::new(path).is_absolute() {
+        return Some(path.to_string());
+    }
+    initial_cwd.map(|cwd| format!("{}/{}", cwd.trim_end_matches('/'), path))
 }
 
 /// Analyze a nushell command and return the most restrictive permission
@@ -526,8 +563,8 @@ fn check_filesystem(
     if cmd.name == "tar" {
         return tar::check_tar(cmd, virtual_cwd, has_uncertain_flow);
     }
-    if matches!(cmd.name.as_str(), "cp" | "mv" | "install") {
-        return copy_move::check_copy_move(cmd, config, virtual_cwd);
+    if copy_move::is_write_command(&cmd.name) {
+        return copy_move::check_write_command(cmd, config, virtual_cwd);
     }
     None
 }

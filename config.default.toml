@@ -26,10 +26,11 @@ default = "passthrough"
 # Write/Edit/Read tools and to rm/tee commands. Same glob syntax as above.
 # ask_paths = ["~/.config/*"]
 
-# Like ask_paths but for *modifying* operations only — Write/Edit/rm/tee and
-# cp/mv/install destinations — NOT Read. Use for system dirs where reads are
-# frequent and benign but writes are dangerous. /bin, /sbin, /lib are symlinks
-# into /usr; list them explicitly since matching is on literal path strings.
+# Like ask_paths but for *modifying* operations only — NOT Read. Covers the
+# Write/Edit tools, rm/tee, cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp
+# targets, and shell output redirects (`>`, `>>`). Use for system dirs where
+# reads are frequent and benign but writes are dangerous. /bin, /sbin, /lib are
+# symlinks into /usr; list them explicitly since matching is on literal strings.
 # ask_write_paths = ["/usr/*", "/bin/*", "/sbin/*", "/lib/*", "/boot/*", "/opt/*"]
 
 # File paths to auto-allow for the Read tool (overrides Claude Code's default

@@ -18,6 +18,9 @@ pub struct Command {
 pub struct AnalysisResult {
     /// All commands found (from pipelines, lists, etc.)
     pub commands: Vec<Command>,
+    /// File targets of output redirects (`>`, `>>`, `&>`, ...). Input
+    /// redirects (`<`) are reads and excluded.
+    pub write_redirects: Vec<String>,
     /// Whether parsing succeeded
     pub success: bool,
     /// Error message if parsing failed
@@ -32,6 +35,7 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
     if let Err(e) = parser.set_language(&language.into()) {
         return AnalysisResult {
             commands: vec![],
+            write_redirects: vec![],
             success: false,
             error: Some(format!("Failed to set language: {}", e)),
         };
@@ -42,6 +46,7 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
         None => {
             return AnalysisResult {
                 commands: vec![],
+                write_redirects: vec![],
                 success: false,
                 error: Some("Failed to parse command".to_string()),
             };
@@ -55,6 +60,7 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
         let error_msg = find_syntax_error(root, cmd.as_bytes());
         return AnalysisResult {
             commands: vec![],
+            write_redirects: vec![],
             success: false,
             error: Some(error_msg),
         };
@@ -63,11 +69,38 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
     let mut commands = Vec::new();
     walk_node(root, cmd.as_bytes(), &mut commands);
 
+    let mut write_redirects = Vec::new();
+    collect_write_redirects(root, cmd.as_bytes(), &mut write_redirects);
+
     AnalysisResult {
         commands,
+        write_redirects,
         success: true,
         error: None,
     }
+}
+
+/// Recursively collect the file targets of output redirects (`>`, `>>`, `&>`,
+/// `>|`, `2>`, ...). Input redirects (`<`, `<<`, `<<<`) are reads and skipped.
+fn collect_write_redirects(node: Node, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "file_redirect"
+        && is_write_redirect(node)
+        && let Some(dest) = node.child_by_field_name("destination")
+    {
+        out.push(get_text(dest, source));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_write_redirects(child, source, out);
+    }
+}
+
+/// True if a `file_redirect` node uses an output (writing) operator.
+fn is_write_redirect(node: Node) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| matches!(child.kind(), ">" | ">>" | "&>" | "&>>" | ">|" | ">&"))
 }
 
 /// Find the first syntax error in the tree and return a helpful message
@@ -313,5 +346,50 @@ mod tests {
         let result = analyze("(ls; pwd");
         assert!(!result.success);
         assert!(result.error.is_some());
+    }
+
+    // Redirect capture tests
+
+    #[test]
+    fn test_redirect_truncate() {
+        let result = analyze("echo hi > /usr/bin/foo");
+        assert!(result.success);
+        assert_eq!(result.write_redirects, vec!["/usr/bin/foo".to_string()]);
+    }
+
+    #[test]
+    fn test_redirect_append() {
+        let result = analyze("echo hi >> /etc/hosts");
+        assert!(result.success);
+        assert_eq!(result.write_redirects, vec!["/etc/hosts".to_string()]);
+    }
+
+    #[test]
+    fn test_redirect_input_is_not_write() {
+        let result = analyze("cat < /usr/bin/foo");
+        assert!(result.success);
+        assert!(result.write_redirects.is_empty());
+    }
+
+    #[test]
+    fn test_redirect_stderr_to_file() {
+        let result = analyze("foo 2> /var/log/x");
+        assert!(result.success);
+        assert_eq!(result.write_redirects, vec!["/var/log/x".to_string()]);
+    }
+
+    #[test]
+    fn test_redirect_fd_dup_not_a_file() {
+        // 2>&1 duplicates a descriptor; destination "1" is not a path.
+        let result = analyze("foo > /tmp/out 2>&1");
+        assert!(result.success);
+        assert!(result.write_redirects.contains(&"/tmp/out".to_string()));
+    }
+
+    #[test]
+    fn test_no_redirect() {
+        let result = analyze("echo hi");
+        assert!(result.success);
+        assert!(result.write_redirects.is_empty());
     }
 }
