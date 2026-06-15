@@ -53,12 +53,30 @@ pub fn check_write_command(
     None
 }
 
+/// Compression tools that create/replace files in place.
+fn is_compression_command(command: &str) -> bool {
+    matches!(
+        command,
+        "gzip"
+            | "gunzip"
+            | "bzip2"
+            | "bunzip2"
+            | "xz"
+            | "unxz"
+            | "zstd"
+            | "unzstd"
+            | "lzma"
+            | "unlzma"
+            | "compress"
+    )
+}
+
 /// True if `command` is a file-mutating command this module guards.
 pub fn is_write_command(command: &str) -> bool {
     matches!(
         command,
         "cp" | "mv" | "install" | "ln" | "mkdir" | "touch" | "chmod" | "chown" | "chgrp"
-    )
+    ) || is_compression_command(command)
 }
 
 /// Extract the path(s) a command writes to, per its argument grammar.
@@ -70,8 +88,71 @@ fn write_targets(cmd: &Command) -> Vec<String> {
         // specs (mode/owner) are not absolute paths, so they never match a
         // protected glob and are harmless to include.
         "mkdir" | "touch" | "chmod" | "chown" | "chgrp" => all_positional_targets(cmd),
+        name if is_compression_command(name) => compression_targets(cmd),
         _ => Vec::new(),
     }
+}
+
+/// Targets of a compression command. The named files are compressed/decompressed
+/// in place (creating e.g. `foo.gz` and removing `foo`). Stdout/test/list modes
+/// don't touch a file path, so they have no targets (a `>` redirect, if any, is
+/// caught by the redirect guard).
+fn compression_targets(cmd: &Command) -> Vec<String> {
+    const READ_ONLY_FLAGS: &[&str] = &[
+        "-c",
+        "--stdout",
+        "--to-stdout",
+        "-t",
+        "--test",
+        "-l",
+        "--list",
+        "-L",
+        "--license",
+        "-V",
+        "--version",
+        "-h",
+        "--help",
+    ];
+    const OPTS_WITH_ARG: &[&str] = &[
+        "-S",
+        "--suffix",
+        "-T",
+        "--threads",
+        "-b",
+        "--block-size",
+        "-F",
+        "--format",
+        "-C",
+        "--check",
+    ];
+
+    if cmd
+        .args
+        .iter()
+        .any(|a| READ_ONLY_FLAGS.contains(&a.as_str()))
+    {
+        return Vec::new();
+    }
+
+    let mut targets = Vec::new();
+    let mut iter = cmd.args.iter();
+    while let Some(arg) = iter.next() {
+        if matches!(arg.as_str(), "-o" | "--output") {
+            if let Some(out) = iter.next() {
+                targets.push(out.clone()); // explicit output path (zstd/xz)
+            }
+            continue;
+        }
+        if OPTS_WITH_ARG.contains(&arg.as_str()) {
+            iter.next();
+            continue;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            continue;
+        }
+        targets.push(arg.clone());
+    }
+    targets
 }
 
 /// Collect every positional argument as a write target, skipping flags and the
@@ -347,13 +428,51 @@ mod tests {
     }
 
     #[test]
+    fn test_gzip_protected_asks() {
+        let cmd = make_cmd("gzip", &["/usr/bin/foo"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_gzip_stdout_is_read_only() {
+        // gzip -c writes stdout, not the named file; no target.
+        let cmd = make_cmd("gzip", &["-c", "/usr/bin/foo"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_gunzip_protected_asks() {
+        let cmd = make_cmd("gunzip", &["/usr/lib/foo.gz"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_zstd_output_path_asks() {
+        let cmd = make_cmd("zstd", &["in", "-o", "/usr/bin/out.zst"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/bin/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_gzip_suffix_value_skipped() {
+        // -S .z value must not be treated as a target; the file is unprotected.
+        let cmd = make_cmd("gzip", &["-S", ".z", "/home/user/foo"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_is_write_command() {
         for c in [
-            "cp", "mv", "install", "ln", "mkdir", "touch", "chmod", "chown", "chgrp",
+            "cp", "mv", "install", "ln", "mkdir", "touch", "chmod", "chown", "chgrp", "gzip",
+            "gunzip", "xz", "zstd",
         ] {
             assert!(is_write_command(c), "{c} should be a write command");
         }
-        for c in ["ls", "cat", "rm", "tee"] {
+        for c in ["ls", "cat", "rm", "tee", "zcat", "zgrep"] {
             assert!(!is_write_command(c), "{c} should not be a write command");
         }
     }

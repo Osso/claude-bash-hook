@@ -16,6 +16,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
   - shell.rs - Shell scripts via `sh -c` / `bash -c` (re-parses inner commands through the same rule engine)
   - php.rs - PHP via `-r` flag (allows read-only operations, denies exec/system/passthru)
   - lua.rs - Lua/LuaJIT via `-e` flag (allows read-only ops, denies os.execute/io.popen/ffi)
+  - perl.rs - Perl via `-e`/`-E` flag (allows read-only ops, asks on open-for-write/unlink/system/backticks)
 - **tool_handlers.rs** - Non-bash tool handling (Write, Edit, regex-replace) with main thread blocking
 - **sql.rs** - MySQL/MariaDB/SQLite query analysis (allow SELECT, ask for writes)
 - **redis.rs** - Redis command analysis (allow read-only commands like GET/LLEN, ask for writes)
@@ -24,7 +25,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
 - **tar.rs** - Tar extraction path validation
 - **rm.rs** - Delete command path validation
 - **tee.rs** - Tee output path validation
-- **copy_move.rs** - Write-target validation for cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp (write-only protected paths). Shell output redirects (`>`, `>>`) are captured in analyzer.rs and checked in analysis.rs
+- **copy_move.rs** - Write-target validation for cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp and compression tools (gzip/gunzip/bzip2/xz/zstd/...). Shell output redirects (`>`, `>>`) are captured in analyzer.rs and checked in analysis.rs
 - **advice.rs** - Optional AI-powered advice for permission decisions
 
 ## Build
