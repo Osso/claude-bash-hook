@@ -28,6 +28,8 @@ fn opts_with_arg_for(command: &str) -> &'static [&'static str] {
         // --reference/--from values are read sources, not targets.
         "chmod" => &["--reference"],
         "chown" | "chgrp" => &["--reference", "--from"],
+        // truncate -s SIZE; -r REFERENCE is a read source.
+        "truncate" => &["-s", "--size", "-r", "--reference"],
         _ => &[],
     }
 }
@@ -93,6 +95,9 @@ pub fn is_write_command(command: &str) -> bool {
             | "yq"
             | "xq"
             | "tomlq"
+            // Resizes/creates files; extracts into a directory.
+            | "truncate"
+            | "unzip"
     ) || is_compression_command(command)
 }
 
@@ -104,8 +109,10 @@ fn write_targets(cmd: &Command) -> Vec<String> {
         // Every positional path is created or modified in place. Leading
         // specs (mode/owner) are not absolute paths, so they never match a
         // protected glob and are harmless to include.
-        "mkdir" | "touch" | "chmod" | "chown" | "chgrp" => all_positional_targets(cmd),
+        "mkdir" | "touch" | "chmod" | "chown" | "chgrp" | "truncate" => all_positional_targets(cmd),
         name if is_compression_command(name) => compression_targets(cmd),
+        // unzip ... -d DIR extracts into DIR.
+        "unzip" => option_values(cmd, &["-d"]),
         // Downloaders/writers: the write target is the value of an output flag.
         "wget" => option_values(
             cmd,
@@ -680,10 +687,40 @@ mod tests {
     }
 
     #[test]
+    fn test_truncate_protected_asks() {
+        let cmd = make_cmd("truncate", &["-s", "0", "/usr/bin/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_truncate_reference_is_read() {
+        // -r REFERENCE is a read source; the written file is unprotected.
+        let cmd = make_cmd("truncate", &["-r", "/usr/bin/ref", "/home/me/x"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_unzip_d_protected_asks() {
+        let cmd = make_cmd("unzip", &["a.zip", "-d", "/usr/bin"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_unzip_no_d_unprotected() {
+        let cmd = make_cmd("unzip", &["a.zip"]);
+        let result = check_write_command(&cmd, &cfg(&["/usr/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_is_write_command() {
         for c in [
             "cp", "mv", "install", "ln", "mkdir", "touch", "chmod", "chown", "chgrp", "gzip",
-            "gunzip", "xz", "zstd", "wget", "curl", "sort", "shuf", "uniq", "yq", "xq",
+            "gunzip", "xz", "zstd", "wget", "curl", "sort", "shuf", "uniq", "yq", "xq", "truncate",
+            "unzip",
         ] {
             assert!(is_write_command(c), "{c} should be a write command");
         }

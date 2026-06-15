@@ -586,7 +586,7 @@ fn check_filesystem(
         return tee::check_tee(cmd, config, initial_cwd);
     }
     if cmd.name == "tar" {
-        return tar::check_tar(cmd, virtual_cwd, has_uncertain_flow);
+        return tar::check_tar(cmd, config, virtual_cwd, has_uncertain_flow);
     }
     if copy_move::is_write_command(&cmd.name) {
         return copy_move::check_write_command(cmd, config, virtual_cwd);
