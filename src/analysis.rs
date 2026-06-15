@@ -67,7 +67,7 @@ pub fn analyze_with_piped_query(
         prev_cmd = Some(cmd);
     }
 
-    most_restrictive.unwrap_or_else(default_allow)
+    allow_in_bypass(most_restrictive.unwrap_or_else(default_allow), ctx)
 }
 
 /// Analyze a nushell command and return the most restrictive permission
@@ -104,7 +104,7 @@ pub fn analyze_nushell_command(
         most_restrictive = Some(merge_restrictive(most_restrictive, result));
     }
 
-    most_restrictive.unwrap_or_else(default_allow)
+    allow_in_bypass(most_restrictive.unwrap_or_else(default_allow), ctx)
 }
 
 fn check_analysis_errors(analysis: &analyzer::AnalysisResult) -> Option<PermissionResult> {
@@ -437,12 +437,10 @@ fn check_scripting(
     full_command: Option<&str>,
 ) -> Option<PermissionResult> {
     let result = check_scripting_inner(cmd, config, ctx, virtual_cwd, initial_cwd, full_command)?;
-    // In bypassPermissions ("yolo") mode the user has opted into trusting all
-    // inline scripts, so never let script content analysis block them.
-    Some(allow_in_bypass(result, ctx))
+    Some(result)
 }
 
-/// In bypass mode, downgrade any ask/deny script verdict to allow.
+/// In bypass mode, downgrade any ask/deny verdict to allow.
 fn allow_in_bypass(mut result: PermissionResult, ctx: ExecContext) -> PermissionResult {
     if ctx.bypass && result.permission != Permission::Allow {
         result.permission = Permission::Allow;

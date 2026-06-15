@@ -56,6 +56,24 @@ fn test_auto_approve_policy_enables_bypass_permission_mode() {
 }
 
 #[test]
+fn test_auto_approve_policy_allows_protected_rm() {
+    let mut config = test_config();
+    config.ask_write_paths.push("/etc/*".to_string());
+    let hook_input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "rm /etc/nonexistent" },
+        "permission_mode": "default",
+        "approval_policy": "auto-approve",
+        "cwd": "/home/osso/Repos/codex"
+    }))
+    .expect("hook input should deserialize");
+
+    let result = analyze_and_resolve(&hook_input, &config, "rm /etc/nonexistent", false)
+        .expect("rm should be classified");
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
 fn test_never_policy_does_not_enable_bypass_permission_mode() {
     let input: HookInput = serde_json::from_value(json!({
         "tool_name": "Bash",
