@@ -3,6 +3,7 @@
 use crate::analyzer;
 use crate::cargo;
 use crate::config::{Config, ExecContext, Permission, PermissionResult};
+use crate::copy_move;
 use crate::curl;
 use crate::docker;
 use crate::git;
@@ -200,6 +201,14 @@ fn check_single_command(
     if !is_remote && let Some(result) = check_inplace_edit(cmd) {
         return result;
     }
+    // Filesystem write-guards run before allow rules so a protected destination
+    // (e.g. `cp`/`mv` into /usr) forces a prompt even though `cp`/`mv` are
+    // otherwise allow-listed. Unprotected paths return None and fall through.
+    if let Some(result) =
+        check_filesystem(cmd, config, virtual_cwd, initial_cwd, has_uncertain_flow)
+    {
+        return result;
+    }
     if let Some(result) = check_cwd_rules(cmd, config, ctx, virtual_cwd, initial_cwd, is_remote) {
         return result;
     }
@@ -211,11 +220,6 @@ fn check_single_command(
         return result;
     }
     if let Some(result) = check_git_special(cmd, config, initial_cwd) {
-        return result;
-    }
-    if let Some(result) =
-        check_filesystem(cmd, config, virtual_cwd, initial_cwd, has_uncertain_flow)
-    {
         return result;
     }
     if let Some(result) = check_misc(cmd, config, ctx, virtual_cwd, initial_cwd) {
@@ -517,10 +521,13 @@ fn check_filesystem(
         return kill::check_kill(cmd);
     }
     if cmd.name == "tee" {
-        return tee::check_tee(cmd, initial_cwd);
+        return tee::check_tee(cmd, config, initial_cwd);
     }
     if cmd.name == "tar" {
         return tar::check_tar(cmd, virtual_cwd, has_uncertain_flow);
+    }
+    if matches!(cmd.name.as_str(), "cp" | "mv" | "install") {
+        return copy_move::check_copy_move(cmd, config, virtual_cwd);
     }
     None
 }

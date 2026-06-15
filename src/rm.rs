@@ -42,7 +42,7 @@ pub fn check_rm(
             continue;
         }
         if let Some(abs) = absolute_path(path, virtual_cwd)
-            && config.is_ask_path(&abs)
+            && config.is_write_protected(&abs)
         {
             return Some(PermissionResult {
                 permission: Permission::Ask,

@@ -3,14 +3,19 @@
 //! Auto-allows tee for files under /tmp/
 
 use crate::analyzer::Command;
-use crate::config::{Permission, PermissionResult};
+use crate::config::{Config, Permission, PermissionResult};
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 
 const REALPATH: &str = "/usr/bin/realpath";
 
 /// Check if a tee command should be auto-allowed
 /// Allows writing to files under /tmp/
-pub fn check_tee(cmd: &Command, _initial_cwd: Option<&str>) -> Option<PermissionResult> {
+pub fn check_tee(
+    cmd: &Command,
+    config: &Config,
+    initial_cwd: Option<&str>,
+) -> Option<PermissionResult> {
     if cmd.name != "tee" {
         return None;
     }
@@ -30,6 +35,19 @@ pub fn check_tee(cmd: &Command, _initial_cwd: Option<&str>) -> Option<Permission
             reason: "tee with no output file".to_string(),
             suggestion: None,
         });
+    }
+
+    // Protected destinations force an explicit prompt.
+    for path in &file_args {
+        if let Some(abs) = absolute_path(path, initial_cwd)
+            && config.is_write_protected(&abs)
+        {
+            return Some(PermissionResult {
+                permission: Permission::Ask,
+                reason: format!("tee targets protected path {}", abs),
+                suggestion: None,
+            });
+        }
     }
 
     // Check each file argument
@@ -60,6 +78,18 @@ fn is_safe_tmp_path(path: &str) -> bool {
 
 fn has_invalid_path_chars(path: &str) -> bool {
     path.is_empty() || path.contains('\0') || path.contains('\n')
+}
+
+/// Resolve a possibly-relative path to absolute using initial_cwd, for
+/// matching against protected-path globs (which are absolute).
+fn absolute_path(path: &str, initial_cwd: Option<&str>) -> Option<String> {
+    if has_invalid_path_chars(path) {
+        return None;
+    }
+    if Path::new(path).is_absolute() {
+        return Some(path.to_string());
+    }
+    initial_cwd.map(|cwd| format!("{}/{}", cwd.trim_end_matches('/'), path))
 }
 
 fn resolve_existing_parent(path: &str) -> Option<String> {
@@ -128,35 +158,35 @@ mod tests {
     #[test]
     fn test_tee_tmp_file() {
         let cmd = make_cmd(&["/tmp/test.log"]);
-        let result = check_tee(&cmd, None).unwrap();
+        let result = check_tee(&cmd, &Config::default(), None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tee_tmp_claude_file() {
         let cmd = make_cmd(&["/tmp/claude/test.log"]);
-        let result = check_tee(&cmd, None).unwrap();
+        let result = check_tee(&cmd, &Config::default(), None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tee_home_not_allowed() {
         let cmd = make_cmd(&["/home/user/file.log"]);
-        let result = check_tee(&cmd, None);
+        let result = check_tee(&cmd, &Config::default(), None);
         assert!(result.is_none()); // passthrough
     }
 
     #[test]
     fn test_tee_no_args() {
         let cmd = make_cmd(&[]);
-        let result = check_tee(&cmd, None).unwrap();
+        let result = check_tee(&cmd, &Config::default(), None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
     #[test]
     fn test_tee_with_append_flag() {
         let cmd = make_cmd(&["-a", "/tmp/test.log"]);
-        let result = check_tee(&cmd, None).unwrap();
+        let result = check_tee(&cmd, &Config::default(), None).unwrap();
         assert_eq!(result.permission, Permission::Allow);
     }
 
@@ -166,7 +196,7 @@ mod tests {
             name: "cat".to_string(),
             args: vec!["/tmp/test.log".to_string()],
         };
-        let result = check_tee(&cmd, None);
+        let result = check_tee(&cmd, &Config::default(), None);
         assert!(result.is_none());
     }
 }

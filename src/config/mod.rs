@@ -109,6 +109,13 @@ pub struct Config {
     #[serde(default)]
     pub ask_paths: Vec<String>,
 
+    /// Paths that force an explicit prompt for *modifying* commands only
+    /// (Write/Edit/rm/tee/cp/mv/install) but NOT Read. Use for system dirs
+    /// like /usr where reads are frequent and benign but writes are dangerous.
+    /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
+    #[serde(default)]
+    pub ask_write_paths: Vec<String>,
+
     /// Paths auto-allowed for Read. `ask_paths` wins on overlap.
     /// Supports exact paths and simple "dir/*" glob patterns. ~ expands to $HOME.
     #[serde(default)]
@@ -521,6 +528,17 @@ impl Config {
     /// Check if a file path is on the ask-list (force prompt for writes/reads/rm).
     pub fn is_ask_path(&self, path: &str) -> bool {
         path_matches_any(path, &self.ask_paths)
+    }
+
+    /// True if `path` is on the write-only ask-list. Does not consider `ask_paths`.
+    pub fn is_ask_write_path(&self, path: &str) -> bool {
+        path_matches_any(path, &self.ask_write_paths)
+    }
+
+    /// True if a *modifying* command targeting `path` must prompt: either the
+    /// universal `ask_paths` or the write-only `ask_write_paths` matches.
+    pub fn is_write_protected(&self, path: &str) -> bool {
+        self.is_ask_path(path) || self.is_ask_write_path(path)
     }
 
     /// Check if a file path is auto-allowed for Read.

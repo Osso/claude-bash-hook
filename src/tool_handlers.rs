@@ -44,7 +44,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
             output_decision(&result.0, &result.1, None, is_codex, supports_updated_input);
             return;
         }
-        if config.is_ask_path(path) {
+        if config.is_write_protected(path) {
             output_decision(
                 "ask",
                 &format!("{} to protected path {}", hook_input.tool_name, path),
@@ -210,6 +210,7 @@ mod tests {
                 tool_input: ToolInput::default(),
                 permission_mode: None,
                 access_mode: None,
+                approval_policy: None,
                 cwd: None,
                 session_id: None,
                 turn_id: None,

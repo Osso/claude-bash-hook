@@ -7,6 +7,7 @@ mod analysis;
 mod analyzer;
 mod cargo;
 mod config;
+mod copy_move;
 mod curl;
 mod docker;
 mod git;

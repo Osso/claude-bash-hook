@@ -24,6 +24,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
 - **tar.rs** - Tar extraction path validation
 - **rm.rs** - Delete command path validation
 - **tee.rs** - Tee output path validation
+- **copy_move.rs** - cp/mv/install destination validation (write-only protected paths)
 - **advice.rs** - Optional AI-powered advice for permission decisions
 
 ## Build
@@ -142,7 +143,8 @@ Outputs JSON to stdout (or nothing for passthrough):
 ```
 
 Also handles:
-- `Write` / `Edit` tools - auto-allows paths in `write_allow_paths` (e.g., `/tmp/*`); asks on `ask_paths` (wins over allow); denies on main thread when `main_thread_default` is set
+- `Write` / `Edit` tools - auto-allows paths in `write_allow_paths` (e.g., `/tmp/*`); asks on `ask_paths` or `ask_write_paths` (win over allow); denies on main thread when `main_thread_default` is set
+- `ask_write_paths` - like `ask_paths` but for *modifying* ops only (Write/Edit/rm/tee/cp/mv/install), not Read. For system dirs (`/usr/*`, etc.) where reads are frequent but writes are dangerous
 - `mcp__regex-replace__regex_replace` - Auto-allows in edit mode, subagent, or dry run; asks otherwise
 - `mcp__nushell__execute` - Nushell MCP tool (passthrough becomes ask)
 
