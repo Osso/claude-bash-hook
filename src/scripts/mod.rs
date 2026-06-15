@@ -9,6 +9,7 @@ pub mod perl;
 pub mod php;
 pub mod python;
 pub mod ruby;
+pub mod sed;
 
 use crate::analyzer::Command;
 use crate::config::{Config, ExecContext, Permission, PermissionResult};
