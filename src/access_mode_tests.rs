@@ -1,9 +1,10 @@
 use crate::config::{Config, Permission};
 use crate::{
-    HookInput, analyze_and_resolve, apply_access_mode_permission, apply_access_mode_result,
-    build_codex_hook_output, build_hook_output, edits_allowed, handle_subagent_event,
-    has_codex_env, parse_hook_input, permission_name, resolve_passthrough,
-    serialize_codex_hook_output, serialize_hook_output,
+    Harness, HookInput, analyze_and_resolve, apply_access_mode_permission,
+    apply_access_mode_result, build_codex_hook_output, build_hook_output, edits_allowed,
+    handle_subagent_event, parse_harness_args, parse_hook_input, permission_name,
+    resolve_passthrough, serialize_codex_hook_output, serialize_hook_output,
+    serialize_hook_output_for_harness,
 };
 use serde_json::json;
 use std::path::Path;
@@ -53,6 +54,47 @@ fn test_auto_approve_policy_enables_bypass_permission_mode() {
     .expect("hook input should deserialize");
 
     assert_eq!(input.effective_permission_mode(), Some("bypassPermissions"));
+}
+
+#[test]
+fn test_default_harness_is_codex() {
+    assert_eq!(parse_harness_args(["claude-bash-hook"]), Ok(Harness::Codex));
+}
+
+#[test]
+fn test_harness_flag_selects_claude_code() {
+    assert_eq!(
+        parse_harness_args(["claude-bash-hook", "--harness", "claude-code"]),
+        Ok(Harness::ClaudeCode)
+    );
+}
+
+#[test]
+fn test_claude_code_harness_serializes_claude_shape() {
+    let json = serialize_hook_output_for_harness(
+        Harness::ClaudeCode,
+        "ask",
+        "needs review",
+        None,
+        /*supports_updated_input*/ true,
+    )
+    .expect("claude code output");
+    assert!(json.contains("\"hookSpecificOutput\""));
+    assert!(json.contains("\"permissionDecision\":\"ask\""));
+}
+
+#[test]
+fn test_codex_harness_serializes_codex_shape_by_default() {
+    let json = serialize_hook_output_for_harness(
+        Harness::Codex,
+        "allow",
+        "safe",
+        None,
+        /*supports_updated_input*/ true,
+    )
+    .expect("codex output");
+    assert!(json.contains("\"hookSpecificOutput\""));
+    assert!(json.contains("\"permissionDecision\":\"allow\""));
 }
 
 #[test]
@@ -316,111 +358,6 @@ fn test_serialize_hook_output_includes_updated_input() {
         value["hookSpecificOutput"]["updatedInput"]["command"],
         "rtk git status"
     );
-}
-
-#[test]
-fn test_is_codex_true_when_access_mode_present() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls" },
-        "access_mode": "supervised"
-    }))
-    .expect("hook input");
-    assert!(input.is_codex());
-}
-
-#[test]
-fn test_is_codex_true_when_nested_under_hook_event() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls" },
-        "hook_event": { "access_mode": "full_access" }
-    }))
-    .expect("hook input");
-    assert!(input.is_codex());
-}
-
-#[test]
-fn test_is_codex_true_when_codex_turn_id_present() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls" },
-        "turn_id": "turn-1"
-    }))
-    .expect("hook input");
-    assert!(input.is_codex());
-}
-
-#[test]
-fn test_is_codex_false_when_only_tool_use_id_present() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls" },
-        "tool_use_id": "call-1"
-    }))
-    .expect("hook input");
-    assert!(!input.is_codex());
-}
-
-#[test]
-fn test_is_codex_true_for_unified_exec_tool_names() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "exec_command",
-        "tool_input": { "command": "ls" }
-    }))
-    .expect("hook input");
-    assert!(input.is_codex());
-}
-
-#[test]
-fn test_is_codex_runtime_uses_codex_env_marker() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "unknown_tool",
-        "tool_input": { "command": "ls" }
-    }))
-    .expect("hook input");
-
-    assert!(crate::is_codex_runtime_with_env(
-        &input,
-        ["CODEX_THREAD_ID"]
-    ));
-}
-
-#[test]
-fn test_is_codex_runtime_does_not_let_inherited_codex_env_override_claude_payload() {
-    let input: HookInput = serde_json::from_value(json!({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls" },
-        "permission_mode": "default",
-        "cwd": "/home/osso/Repos/codex",
-        "session_id": "claude-session",
-        "tool_use_id": "toolu_01claude"
-    }))
-    .expect("hook input");
-
-    assert!(!crate::is_codex_runtime_with_env(
-        &input,
-        ["CODEX_THREAD_ID"]
-    ));
-}
-
-#[test]
-fn test_is_codex_false_for_claude_payload() {
-    let input: HookInput = serde_json::from_value(json!({
-        "tool_name": "Bash",
-        "tool_input": { "command": "ls" },
-        "permission_mode": "default"
-    }))
-    .expect("hook input");
-    assert!(!input.is_codex());
-}
-
-#[test]
-fn test_has_codex_env_detects_codex_markers() {
-    assert!(has_codex_env(["CODEX_THREAD_ID"]));
-    assert!(has_codex_env(["PATH", "CODEX_CI"]));
-    assert!(!has_codex_env(["PATH", "HOME"]));
 }
 
 #[test]

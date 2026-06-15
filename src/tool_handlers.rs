@@ -2,23 +2,27 @@
 
 use crate::config::{Config, Permission, PermissionResult};
 use crate::{
-    HookInput, apply_access_mode_result, check_write_path, edits_allowed, is_codex_runtime,
-    output_decision, permission_name,
+    Harness, HookInput, apply_access_mode_result, check_write_path, edits_allowed, output_decision,
+    permission_name,
 };
 
 /// Handle Write, Edit, Read, and regex-replace tools.
 /// Returns true if the tool was handled (caller should return), false otherwise.
-pub fn handle_non_bash_tool(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
-    let is_codex = is_codex_runtime(hook_input);
+pub fn handle_non_bash_tool(
+    hook_input: &HookInput,
+    config: &Config,
+    is_subagent: bool,
+    harness: Harness,
+) -> bool {
     if hook_input.tool_name == "Write" || hook_input.tool_name == "Edit" {
-        handle_write_edit(hook_input, config, is_subagent, is_codex);
+        handle_write_edit(hook_input, config, is_subagent, harness);
         return true;
     }
     if hook_input.tool_name == "Read" {
-        return handle_read(hook_input, config, is_codex);
+        return handle_read(hook_input, config, harness);
     }
     if is_regex_replace_tool(&hook_input.tool_name) {
-        handle_regex_replace(hook_input, is_subagent, is_codex);
+        handle_regex_replace(hook_input, is_subagent, harness);
         return true;
     }
     false
@@ -34,14 +38,14 @@ fn is_regex_replace_tool(tool_name: &str) -> bool {
     )
 }
 
-fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool, is_codex: bool) {
+fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool, harness: Harness) {
     let supports_updated_input = hook_input.supports_updated_input;
-    if check_main_thread_block(hook_input, config, is_subagent, is_codex) {
+    if check_main_thread_block(hook_input, config, is_subagent, harness) {
         return;
     }
     if let Some(ref path) = hook_input.tool_input.file_path {
         if let Some(result) = check_write_path(path) {
-            output_decision(&result.0, &result.1, None, is_codex, supports_updated_input);
+            output_decision(&result.0, &result.1, None, harness, supports_updated_input);
             return;
         }
         if config.is_write_protected(path) {
@@ -49,7 +53,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
                 "ask",
                 &format!("{} to protected path {}", hook_input.tool_name, path),
                 None,
-                is_codex,
+                harness,
                 supports_updated_input,
             );
             return;
@@ -59,7 +63,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
                 "allow",
                 &format!("{} to allowed path {}", hook_input.tool_name, path),
                 None,
-                is_codex,
+                harness,
                 supports_updated_input,
             );
             return;
@@ -79,7 +83,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
                 permission_name(result.permission),
                 &result.reason,
                 None,
-                is_codex,
+                harness,
                 supports_updated_input,
             );
         }
@@ -90,7 +94,7 @@ fn handle_write_edit(hook_input: &HookInput, config: &Config, is_subagent: bool,
 /// Handle Read tool. Emits a decision when the path is on the ask-list or
 /// auto-allow list; otherwise returns true without output so Claude Code's
 /// default applies. `ask_paths` wins on overlap.
-fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool {
+fn handle_read(hook_input: &HookInput, config: &Config, harness: Harness) -> bool {
     let supports_updated_input = hook_input.supports_updated_input;
     let Some(ref path) = hook_input.tool_input.file_path else {
         return true;
@@ -100,7 +104,7 @@ fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool 
             "ask",
             &format!("Read from protected path {}", path),
             None,
-            is_codex,
+            harness,
             supports_updated_input,
         );
         return true;
@@ -110,7 +114,7 @@ fn handle_read(hook_input: &HookInput, config: &Config, is_codex: bool) -> bool 
             "allow",
             &format!("Read from allowed path {}", path),
             None,
-            is_codex,
+            harness,
             supports_updated_input,
         );
     }
@@ -121,7 +125,7 @@ fn check_main_thread_block(
     hook_input: &HookInput,
     config: &Config,
     is_subagent: bool,
-    is_codex: bool,
+    harness: Harness,
 ) -> bool {
     let is_disabled = !is_subagent
         && matches!(
@@ -143,13 +147,13 @@ fn check_main_thread_block(
         "deny",
         "main thread file writes disabled. Use Task() to delegate to subagents",
         None,
-        is_codex,
+        harness,
         hook_input.supports_updated_input,
     );
     true
 }
 
-fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool, is_codex: bool) {
+fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool, harness: Harness) {
     let edit_mode = edits_allowed(hook_input.effective_permission_mode());
     let is_dry_run = hook_input.tool_input.dry_run.unwrap_or(false);
     let reason = regex_replace_reason(edit_mode, is_dry_run, is_subagent);
@@ -170,7 +174,7 @@ fn handle_regex_replace(hook_input: &HookInput, is_subagent: bool, is_codex: boo
         permission_name(result.permission),
         &result.reason,
         None,
-        is_codex,
+        harness,
         hook_input.supports_updated_input,
     );
 }
@@ -203,6 +207,18 @@ mod tests {
         toml::from_str(&format!(r#"main_thread_default = "{}""#, permission)).expect("config")
     }
 
+    fn handle_tool(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
+        handle_non_bash_tool(hook_input, config, is_subagent, Harness::Codex)
+    }
+
+    fn check_main_thread_block_for_test(
+        hook_input: &HookInput,
+        config: &Config,
+        is_subagent: bool,
+    ) -> bool {
+        check_main_thread_block(hook_input, config, is_subagent, Harness::Codex)
+    }
+
     impl Default for HookInput {
         fn default() -> Self {
             HookInput {
@@ -213,8 +229,6 @@ mod tests {
                 approval_policy: None,
                 cwd: None,
                 session_id: None,
-                turn_id: None,
-                tool_use_id: None,
                 hook_event_name: None,
                 hook_event: None,
                 supports_updated_input: false,
@@ -224,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_handle_non_bash_tool_returns_false_for_other_tools() {
-        let handled = handle_non_bash_tool(&hook_input("Bash"), &Config::default(), false);
+        let handled = handle_tool(&hook_input("Bash"), &Config::default(), false);
         assert!(!handled);
     }
 
@@ -232,21 +246,21 @@ mod tests {
     fn test_handle_non_bash_tool_handles_regex_replace() {
         let mut input = hook_input("mcp__regex-replace__regex_replace");
         input.tool_input.dry_run = Some(true);
-        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+        assert!(handle_tool(&input, &Config::default(), false));
     }
 
     #[test]
     fn test_handle_non_bash_tool_handles_codex_regex_replace_name() {
         let mut input = hook_input("regex-replace.regex_replace");
         input.tool_input.dry_run = Some(true);
-        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+        assert!(handle_tool(&input, &Config::default(), false));
     }
 
     #[test]
     fn test_handle_non_bash_tool_handles_write_edit() {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
-        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+        assert!(handle_tool(&input, &Config::default(), false));
     }
 
     #[test]
@@ -254,7 +268,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
         let config = config_with_main_thread_default("deny");
-        assert!(check_main_thread_block(&input, &config, false, false));
+        assert!(check_main_thread_block_for_test(&input, &config, false));
     }
 
     #[test]
@@ -268,7 +282,7 @@ mod tests {
         "#,
         )
         .expect("config");
-        assert!(!check_main_thread_block(&input, &config, false, false));
+        assert!(!check_main_thread_block_for_test(&input, &config, false));
     }
 
     #[test]
@@ -276,7 +290,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
         let config = config_with_main_thread_default("deny");
-        assert!(!check_main_thread_block(&input, &config, true, false));
+        assert!(!check_main_thread_block_for_test(&input, &config, true));
     }
 
     #[test]
@@ -284,7 +298,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/test.txt".to_string());
         let config = config_with_main_thread_default("allow");
-        assert!(!check_main_thread_block(&input, &config, false, false));
+        assert!(!check_main_thread_block_for_test(&input, &config, false));
     }
 
     #[test]
@@ -310,7 +324,7 @@ mod tests {
     #[test]
     fn test_handle_regex_replace_ask_path() {
         let input = hook_input("mcp__regex-replace__regex_replace");
-        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+        assert!(handle_tool(&input, &Config::default(), false));
     }
 
     fn ask_paths_config(pattern: &str) -> Config {
@@ -322,14 +336,14 @@ mod tests {
         let mut input = hook_input("Read");
         input.tool_input.file_path = Some("/home/user/.config/kitty.conf".to_string());
         let config = ask_paths_config("/home/user/.config/*");
-        assert!(handle_non_bash_tool(&input, &config, false));
+        assert!(handle_tool(&input, &config, false));
     }
 
     #[test]
     fn test_handle_non_bash_tool_read_no_match_still_handled() {
         let mut input = hook_input("Read");
         input.tool_input.file_path = Some("/tmp/file.txt".to_string());
-        assert!(handle_non_bash_tool(&input, &Config::default(), false));
+        assert!(handle_tool(&input, &Config::default(), false));
     }
 
     #[test]
@@ -338,7 +352,7 @@ mod tests {
         input.tool_input.file_path = Some("/home/user/Repos/foo.rs".to_string());
         let config: Config =
             toml::from_str(r#"read_allow_paths = ["/home/user/Repos/*"]"#).expect("config");
-        assert!(handle_non_bash_tool(&input, &config, false));
+        assert!(handle_tool(&input, &config, false));
     }
 
     #[test]
@@ -352,7 +366,7 @@ mod tests {
         "#,
         )
         .expect("config");
-        assert!(handle_non_bash_tool(&input, &config, false));
+        assert!(handle_tool(&input, &config, false));
     }
 
     #[test]
@@ -360,7 +374,7 @@ mod tests {
         let mut input = hook_input("Write");
         input.tool_input.file_path = Some("/tmp/mcp_probe.py".to_string());
         let config: Config = toml::from_str(r#"write_allow_paths = ["/tmp/*"]"#).expect("config");
-        assert!(handle_non_bash_tool(&input, &config, false));
+        assert!(handle_tool(&input, &config, false));
     }
 
     #[test]
@@ -374,6 +388,6 @@ mod tests {
         "#,
         )
         .expect("config");
-        assert!(handle_non_bash_tool(&input, &config, false));
+        assert!(handle_tool(&input, &config, false));
     }
 }

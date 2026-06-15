@@ -34,8 +34,6 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 
-const CODEX_ENV_MARKERS: [&str; 2] = ["CODEX_THREAD_ID", "CODEX_CI"];
-
 #[cfg(test)]
 pub(crate) use analysis::analyze_command;
 
@@ -61,12 +59,6 @@ struct HookInput {
     /// Session identifier
     #[serde(default)]
     session_id: Option<String>,
-    /// Codex extension: active turn id. Claude Code does not send this today.
-    #[serde(default)]
-    turn_id: Option<String>,
-    /// Current tool-use id. Claude Code also sends this on PreToolUse.
-    #[serde(default)]
-    tool_use_id: Option<String>,
     /// Codex extension: runtime accepts `hookSpecificOutput.updatedInput`.
     #[serde(default)]
     supports_updated_input: bool,
@@ -108,45 +100,54 @@ impl HookInput {
             _ => self.permission_mode.as_deref(),
         }
     }
+}
 
-    /// Detect Codex from explicit mode fields and Codex-only hook payload fields.
-    ///
-    /// Older Codex builds omitted `access_mode`; relying only on that field
-    /// made us emit Claude-shaped permission output that Codex rejected.
-    pub(crate) fn is_codex(&self) -> bool {
-        self.access_mode().is_some()
-            || self.turn_id.is_some()
-            || self.supports_updated_input
-            || matches!(self.tool_name.as_str(), "exec_command" | "write_stdin")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Harness {
+    Codex,
+    ClaudeCode,
+}
+
+pub(crate) fn parse_harness_args<I, S>(args: I) -> Result<Harness, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut harness = Harness::Codex;
+    let mut args = args.into_iter();
+    let _program = args.next();
+    while let Some(arg) = args.next() {
+        match arg.as_ref() {
+            "--harness" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--harness requires a value".to_string())?;
+                harness = parse_harness_value(value.as_ref())?;
+            }
+            other => return Err(format!("unknown argument `{other}`")),
+        }
     }
+    Ok(harness)
+}
 
-    pub(crate) fn is_explicit_claude_payload(&self) -> bool {
-        let valid_tool_use_id = self.tool_use_id.as_deref().is_none_or(|id| !id.is_empty());
-        self.hook_event_name.is_some()
-            && self.permission_mode.is_some()
-            && self.access_mode().is_none()
-            && self.turn_id.is_none()
-            && valid_tool_use_id
-            && !self.supports_updated_input
-            && matches!(self.tool_name.as_str(), "Bash" | "Write" | "Edit" | "Read")
+fn parse_harness_value(value: &str) -> Result<Harness, String> {
+    match value {
+        "codex" => Ok(Harness::Codex),
+        "claude-code" => Ok(Harness::ClaudeCode),
+        _ => Err(format!(
+            "invalid harness `{value}`; expected `codex` or `claude-code`"
+        )),
     }
 }
 
-fn has_codex_env(vars: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
-    vars.into_iter()
-        .any(|name| CODEX_ENV_MARKERS.contains(&name.as_ref()))
-}
-
-pub(crate) fn is_codex_runtime_with_env(
-    hook_input: &HookInput,
-    env_names: impl IntoIterator<Item = impl AsRef<str>>,
-) -> bool {
-    hook_input.is_codex() || (!hook_input.is_explicit_claude_payload() && has_codex_env(env_names))
-}
-
-pub(crate) fn is_codex_runtime(hook_input: &HookInput) -> bool {
-    let env_names = std::env::vars_os().filter_map(|(name, _)| name.into_string().ok());
-    is_codex_runtime_with_env(hook_input, env_names)
+fn read_harness_args() -> Harness {
+    match parse_harness_args(std::env::args()) {
+        Ok(harness) => harness,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
+    }
 }
 
 /// Check if edits are allowed based on permission mode
@@ -321,6 +322,21 @@ fn serialize_codex_hook_output(
     .ok()
 }
 
+fn serialize_hook_output_for_harness(
+    harness: Harness,
+    decision: &str,
+    reason: &str,
+    updated_input: Option<serde_json::Value>,
+    supports_updated_input: bool,
+) -> Option<String> {
+    match harness {
+        Harness::Codex => {
+            serialize_codex_hook_output(decision, reason, updated_input, supports_updated_input)
+        }
+        Harness::ClaudeCode => serialize_hook_output(decision, reason, updated_input),
+    }
+}
+
 /// Output a hook decision, optionally with a rewritten command. Codex accepts
 /// allow (auto-approve), ask (+ optional rewrite), and legacy block (deny);
 /// rewrites are attached only when the runtime advertises updatedInput support.
@@ -328,18 +344,16 @@ fn output_decision(
     decision: &str,
     reason: &str,
     updated_input: Option<serde_json::Value>,
-    is_codex: bool,
+    harness: Harness,
     supports_updated_input: bool,
 ) {
-    if is_codex {
-        if let Some(json) =
-            serialize_codex_hook_output(decision, reason, updated_input, supports_updated_input)
-        {
-            println!("{}", json);
-        }
-        return;
-    }
-    if let Some(json) = serialize_hook_output(decision, reason, updated_input) {
+    if let Some(json) = serialize_hook_output_for_harness(
+        harness,
+        decision,
+        reason,
+        updated_input,
+        supports_updated_input,
+    ) {
         println!("{}", json);
     }
 }
@@ -415,7 +429,7 @@ fn emit_decision(
     result: &PermissionResult,
     config: &Config,
     alias_command: Option<&str>,
-    is_codex: bool,
+    harness: Harness,
     supports_updated_input: bool,
 ) {
     let reason = output::format_reason(command, result);
@@ -435,7 +449,7 @@ fn emit_decision(
         decision,
         &reason,
         updated_input,
-        is_codex,
+        harness,
         supports_updated_input,
     );
 }
@@ -487,7 +501,12 @@ fn is_shell_tool(tool_name: &str) -> bool {
     tool_name == "Bash" || is_nushell_tool(tool_name)
 }
 
-fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewritten: bool) {
+fn handle_passthrough_decision(
+    hook_input: &HookInput,
+    command: &str,
+    alias_rewritten: bool,
+    harness: Harness,
+) {
     info!(
         "decision=passthrough session={:?} command={:?}",
         hook_input.session_id, command
@@ -498,7 +517,7 @@ fn handle_passthrough_decision(hook_input: &HookInput, command: &str, alias_rewr
             "allow",
             "alias rewrite",
             Some(serde_json::json!({ "command": command })),
-            is_codex_runtime(hook_input),
+            harness,
             hook_input.supports_updated_input,
         );
     }
@@ -510,6 +529,7 @@ fn emit_analyzed_decision(
     config: &Config,
     alias_rewritten: Option<&str>,
     result: &PermissionResult,
+    harness: Harness,
 ) {
     info!(
         "decision={} session={:?} command={:?} reason={:?}",
@@ -523,20 +543,21 @@ fn emit_analyzed_decision(
         result,
         config,
         alias_rewritten,
-        is_codex_runtime(hook_input),
+        harness,
         hook_input.supports_updated_input,
     );
 }
 
 fn main() {
     init_logging();
+    let harness = read_harness_args();
     let hook_input = read_hook_input();
     if handle_subagent_event(&hook_input) {
         return;
     }
     let is_subagent = session_has_subagents(hook_input.session_id.as_deref());
     let config = Config::load_or_default();
-    if tool_handlers::handle_non_bash_tool(&hook_input, &config, is_subagent) {
+    if tool_handlers::handle_non_bash_tool(&hook_input, &config, is_subagent, harness) {
         return;
     }
     if !is_shell_tool(&hook_input.tool_name) {
@@ -552,7 +573,7 @@ fn main() {
     let command = alias_rewritten.as_deref().unwrap_or(original_command);
 
     let Some(result) = analyze_and_resolve(&hook_input, &config, command, is_nushell) else {
-        handle_passthrough_decision(&hook_input, command, alias_rewritten.is_some());
+        handle_passthrough_decision(&hook_input, command, alias_rewritten.is_some(), harness);
         return;
     };
 
@@ -562,6 +583,7 @@ fn main() {
         &config,
         alias_rewritten.as_deref(),
         &result,
+        harness,
     );
 }
 
