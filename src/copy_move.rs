@@ -89,6 +89,10 @@ pub fn is_write_command(command: &str) -> bool {
             | "sort"
             | "shuf"
             | "uniq"
+            // Structured-data editors with an in-place flag.
+            | "yq"
+            | "xq"
+            | "tomlq"
     ) || is_compression_command(command)
 }
 
@@ -111,8 +115,46 @@ fn write_targets(cmd: &Command) -> Vec<String> {
         "sort" | "shuf" => option_values(cmd, &["-o", "--output"]),
         // uniq [INPUT [OUTPUT]] — the second positional is the output file.
         "uniq" => uniq_output_target(cmd),
+        // yq/xq EXPR FILE... rewrite FILE in place under -i.
+        "yq" | "xq" | "tomlq" => yq_inplace_targets(cmd),
         _ => Vec::new(),
     }
+}
+
+/// Files a `yq`/`xq` invocation rewrites in place. Only `-i`/`--inplace` writes;
+/// the first positional is the filter expression, the rest are files.
+fn yq_inplace_targets(cmd: &Command) -> Vec<String> {
+    let inplace = cmd
+        .args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-i" | "--inplace" | "--in-place"));
+    if !inplace {
+        return Vec::new();
+    }
+    const OPTS_WITH_ARG: &[&str] = &[
+        "-I",
+        "--indent",
+        "-o",
+        "--output-format",
+        "-p",
+        "--input-format",
+        "--xml-attribute-prefix",
+        "--xml-content-name",
+    ];
+    let mut positionals = Vec::new();
+    let mut iter = cmd.args.iter();
+    while let Some(arg) = iter.next() {
+        if OPTS_WITH_ARG.contains(&arg.as_str()) {
+            iter.next();
+            continue;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            continue;
+        }
+        positionals.push(arg.clone());
+    }
+    // Drop the leading filter expression; the remaining positionals are files.
+    positionals.into_iter().skip(1).collect()
 }
 
 /// Collect the values of any of `flags`, handling separated (`-o val`),
@@ -615,10 +657,33 @@ mod tests {
     }
 
     #[test]
+    fn test_yq_inplace_protected_asks() {
+        let cmd = make_cmd("yq", &["-i", ".a=1", "/etc/config.yaml"]);
+        let result = check_write_command(&cmd, &cfg(&["/etc/*"]), None).unwrap();
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_yq_no_inplace_is_read() {
+        // Without -i, yq writes stdout; reading a protected file is fine.
+        let cmd = make_cmd("yq", &[".a", "/etc/config.yaml"]);
+        let result = check_write_command(&cmd, &cfg(&["/etc/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_yq_inplace_expression_not_treated_as_path() {
+        // The filter expression is dropped; an unprotected file is fine.
+        let cmd = make_cmd("yq", &["-i", ".a=1", "/home/me/config.yaml"]);
+        let result = check_write_command(&cmd, &cfg(&["/etc/*"]), None);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_is_write_command() {
         for c in [
             "cp", "mv", "install", "ln", "mkdir", "touch", "chmod", "chown", "chgrp", "gzip",
-            "gunzip", "xz", "zstd", "wget", "curl", "sort", "shuf", "uniq",
+            "gunzip", "xz", "zstd", "wget", "curl", "sort", "shuf", "uniq", "yq", "xq",
         ] {
             assert!(is_write_command(c), "{c} should be a write command");
         }

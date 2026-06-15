@@ -28,7 +28,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
 - **tar.rs** - Tar extraction path validation
 - **rm.rs** - Delete command path validation
 - **tee.rs** - Tee output path validation
-- **copy_move.rs** - Write-target validation for cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp, compression tools (gzip/gunzip/bzip2/xz/zstd/...), and output-file flags of fetchers/sorters (wget -O/-P, curl -o, sort/shuf -o, uniq OUTPUT). Shell output redirects (`>`, `>>`) are captured in analyzer.rs and checked in analysis.rs
+- **copy_move.rs** - Write-target validation for cp/mv/install/ln/mkdir/touch/chmod/chown/chgrp, compression tools (gzip/gunzip/bzip2/xz/zstd/...), and output-file flags of fetchers/sorters (wget -O/-P, curl -o, sort/shuf -o, uniq OUTPUT), and yq/xq -i in-place edits. Shell output redirects (`>`, `>>`) are captured in analyzer.rs and checked in analysis.rs
 - **advice.rs** - Optional AI-powered advice for permission decisions
 
 ## Build
