@@ -17,6 +17,8 @@ PreToolUse hook for Claude Code that provides granular permission control over B
   - php.rs - PHP via `-r` flag (allows read-only operations, denies exec/system/passthru)
   - lua.rs - Lua/LuaJIT via `-e` flag (allows read-only ops, denies os.execute/io.popen/ffi)
   - perl.rs - Perl via `-e`/`-E` flag (allows read-only ops, asks on open-for-write/unlink/system/backticks)
+  - node.rs - Node via `-e`/`-p`/`--eval`/`--print` (allows read-only ops, asks on fs writes/child_process/network/eval)
+  - ruby.rs - Ruby via `-e` flag (allows read-only ops, asks on File writes/system/backticks/network/eval)
 - **tool_handlers.rs** - Non-bash tool handling (Write, Edit, regex-replace) with main thread blocking
 - **sql.rs** - MySQL/MariaDB/SQLite query analysis (allow SELECT, ask for writes)
 - **redis.rs** - Redis command analysis (allow read-only commands like GET/LLEN, ask for writes)

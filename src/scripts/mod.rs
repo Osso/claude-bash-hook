@@ -3,9 +3,11 @@
 //! Each language has its own module that checks if inline scripts are read-only.
 
 pub mod lua;
+pub mod node;
 pub mod perl;
 pub mod php;
 pub mod python;
+pub mod ruby;
 
 use crate::analyzer::Command;
 use crate::config::{Config, ExecContext, Permission, PermissionResult};

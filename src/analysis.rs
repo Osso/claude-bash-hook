@@ -513,6 +513,16 @@ fn check_scripting_inner(
             return Some(result);
         }
     }
+    if cmd.name == "node" || cmd.name == "nodejs" {
+        if let Some(result) = scripts::node::check_node_script(cmd) {
+            return Some(result);
+        }
+    }
+    if cmd.name == "ruby" {
+        if let Some(result) = scripts::ruby::check_ruby_script(cmd) {
+            return Some(result);
+        }
+    }
     if cmd.name.starts_with("python") {
         if let Some(result) = scripts::python::check_python_script(cmd, full_command, initial_cwd) {
             return Some(result);
