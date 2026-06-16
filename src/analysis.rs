@@ -522,7 +522,9 @@ fn check_scripting_inner(
         }
     }
     if cmd.name == "node" || cmd.name == "nodejs" {
-        if let Some(result) = scripts::node::check_node_script(cmd) {
+        if let Some(result) =
+            scripts::node::check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx)
+        {
             return Some(result);
         }
     }
