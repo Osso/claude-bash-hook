@@ -448,7 +448,15 @@ fn check_database(
     piped_query: Option<&str>,
 ) -> Option<PermissionResult> {
     if config.is_mysql_alias(&cmd.name) {
-        return check_database_query(sql::check_mysql_query(cmd), piped_query);
+        return Some(
+            check_database_query(sql::check_mysql_query(cmd), piped_query).unwrap_or_else(|| {
+                PermissionResult {
+                    permission: Permission::Ask,
+                    reason: format!("{} SQL source is not visible to analyzer", cmd.name),
+                    suggestion: None,
+                }
+            }),
+        );
     }
     if cmd.name == "sqlite3" {
         return check_database_query(sql::check_sqlite3_query(cmd), piped_query);

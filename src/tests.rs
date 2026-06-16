@@ -61,6 +61,25 @@ fn test_sudo_dangerous() {
 }
 
 #[test]
+fn test_mysql_redirected_input_asks() {
+    let config = test_config();
+    let result = analyze_command(
+        "mysql < db/etls/2026/migration.sql",
+        &config,
+        ExecContext::default(),
+        Some("/syncthing/Sync/Projects/globalcomix/gc"),
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_mysql_without_visible_query_asks() {
+    let config = test_config();
+    let result = analyze_command("mysql globalcomix", &config, ExecContext::default(), None);
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
 fn test_chain_with_dangerous() {
     let config = test_config();
     let result = analyze_command("ls && rm -rf /tmp", &config, ExecContext::default(), None);
