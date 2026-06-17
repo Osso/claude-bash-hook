@@ -38,7 +38,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
 cargo build --release
 ```
 
-Deploy: `bash deploy.sh` (installs both binaries to `~/bin/` via `cargo install`)
+Deploy: `bash deploy.sh` (installs both binaries to `~/.cargo/bin/` via `cargo install`; settings.json invokes the hook from that absolute path)
 
 ## Config
 

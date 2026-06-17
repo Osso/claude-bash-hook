@@ -3,9 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Remove old symlinks from previous deploys (cargo install needs a regular file).
+# Remove stale copies from previous deploys (older installs targeted ~/bin;
+# settings.json invokes the hook by absolute path from ~/.cargo/bin).
 rm -f ~/bin/claude-bash-hook ~/bin/claude-bash-hook-approval
 
-cargo install --path . --root ~ --force \
+cargo install --path . --root ~/.cargo --force \
     --bin claude-bash-hook \
     --bin claude-bash-hook-approval
