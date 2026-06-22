@@ -258,11 +258,18 @@ fn command_allowed(
     initial_cwd: Option<&str>,
     ctx: ExecContext,
 ) -> bool {
-    if config.check_command_with_cwd(bin, args, virtual_cwd, ctx).permission == Permission::Allow {
+    if config
+        .check_command_with_cwd(bin, args, virtual_cwd, ctx)
+        .permission
+        == Permission::Allow
+    {
         return true;
     }
     if initial_cwd != virtual_cwd
-        && config.check_command_with_cwd(bin, args, initial_cwd, ctx).permission == Permission::Allow
+        && config
+            .check_command_with_cwd(bin, args, initial_cwd, ctx)
+            .permission
+            == Permission::Allow
     {
         return true;
     }
@@ -306,10 +313,9 @@ pub fn check_node_script(
         ExecScan::None => allow("read-only Node script"),
         ExecScan::Unparseable => ask("Node script spawns an unrecognized command"),
         ExecScan::Calls(calls) => {
-            if calls
-                .iter()
-                .all(|(bin, args)| command_allowed(config, bin, args, virtual_cwd, initial_cwd, ctx))
-            {
+            if calls.iter().all(|(bin, args)| {
+                command_allowed(config, bin, args, virtual_cwd, initial_cwd, ctx)
+            }) {
                 allow("Node script only spawns allowed commands")
             } else {
                 ask("Node script spawns a command requiring approval")
@@ -356,7 +362,10 @@ mod tests {
     #[test]
     fn test_console_log_allowed() {
         let cmd = make_cmd(&["-e", "console.log(1+1)"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Allow);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Allow
+        );
     }
 
     #[test]
@@ -365,49 +374,79 @@ mod tests {
             "-e",
             "console.log(require('fs').readFileSync('/etc/hosts','utf8'))",
         ]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Allow);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Allow
+        );
     }
 
     #[test]
     fn test_write_file_asks() {
         let cmd = make_cmd(&["-e", "require('fs').writeFileSync('/usr/bin/evil','x')"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Ask);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Ask
+        );
     }
 
     #[test]
     fn test_unlink_asks() {
         let cmd = make_cmd(&["-e", "require('fs').unlinkSync('/usr/bin/foo')"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Ask);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Ask
+        );
     }
 
     #[test]
     fn test_fetch_asks() {
         let cmd = make_cmd(&["-e", "fetch('http://example.com')"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Ask);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Ask
+        );
     }
 
     #[test]
     fn test_print_flag_extracted() {
         let cmd = make_cmd(&["-p", "require('fs').writeFileSync('/usr/x','y')"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Ask);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Ask
+        );
     }
 
     #[test]
     fn test_eval_long_flag_extracted() {
         let cmd = make_cmd(&["--eval", "console.log(process.version)"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Allow);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Allow
+        );
     }
 
     #[test]
     fn test_glued_eval_extracted() {
         let cmd = make_cmd(&["-econsole.log(1)"]);
-        assert_eq!(check(&cmd, &config_allowing(&[])).permission, Permission::Allow);
+        assert_eq!(
+            check(&cmd, &config_allowing(&[])).permission,
+            Permission::Allow
+        );
     }
 
     #[test]
     fn test_no_inline_code_returns_none() {
         let cmd = make_cmd(&["script.js"]);
-        assert!(check_node_script(&cmd, &config_allowing(&[]), None, None, ExecContext::default()).is_none());
+        assert!(
+            check_node_script(
+                &cmd,
+                &config_allowing(&[]),
+                None,
+                None,
+                ExecContext::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -416,7 +455,16 @@ mod tests {
             name: "ruby".to_string(),
             args: vec!["-e".to_string(), "puts 1".to_string()],
         };
-        assert!(check_node_script(&cmd, &config_allowing(&[]), None, None, ExecContext::default()).is_none());
+        assert!(
+            check_node_script(
+                &cmd,
+                &config_allowing(&[]),
+                None,
+                None,
+                ExecContext::default()
+            )
+            .is_none()
+        );
     }
 
     // --- process-execution introspection ---
@@ -496,7 +544,10 @@ mod tests {
 
     #[test]
     fn test_execsync_shell_string_asks() {
-        let cmd = make_cmd(&["-e", r#"require("child_process").execSync("code-index list");"#]);
+        let cmd = make_cmd(&[
+            "-e",
+            r#"require("child_process").execSync("code-index list");"#,
+        ]);
         assert_eq!(
             check(&cmd, &config_allowing(&["code-index"])).permission,
             Permission::Ask

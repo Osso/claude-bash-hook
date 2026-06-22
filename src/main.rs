@@ -14,6 +14,7 @@ mod git;
 mod host_advice;
 mod kill;
 mod magick;
+mod mysql_gc;
 mod nushell;
 mod output;
 mod redis;
@@ -36,6 +37,9 @@ use std::io::{self, Read};
 
 #[cfg(test)]
 pub(crate) use analysis::analyze_command;
+
+#[cfg(test)]
+mod mysql_gc_tests;
 
 /// Input from Claude Code hook
 #[derive(Debug, Deserialize)]

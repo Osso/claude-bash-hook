@@ -9,6 +9,7 @@ use crate::docker;
 use crate::git;
 use crate::kill;
 use crate::magick;
+use crate::mysql_gc;
 use crate::nushell;
 use crate::redis;
 use crate::rm;
@@ -447,6 +448,9 @@ fn check_database(
     config: &Config,
     piped_query: Option<&str>,
 ) -> Option<PermissionResult> {
+    if let Some(result) = mysql_gc::check_profile(cmd, piped_query) {
+        return Some(result);
+    }
     if config.is_mysql_alias(&cmd.name) {
         return Some(
             check_database_query(sql::check_mysql_query(cmd), piped_query).unwrap_or_else(|| {
@@ -506,43 +510,83 @@ fn check_scripting_inner(
     initial_cwd: Option<&str>,
     full_command: Option<&str>,
 ) -> Option<PermissionResult> {
+    check_php_script(cmd)
+        .or_else(|| check_lua_script(cmd))
+        .or_else(|| check_perl_script(cmd))
+        .or_else(|| check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx))
+        .or_else(|| check_ruby_script(cmd))
+        .or_else(|| check_awk_script(cmd))
+        .or_else(|| check_sed_script(cmd, config, virtual_cwd))
+        .or_else(|| check_python_script(cmd, config, ctx, virtual_cwd, initial_cwd, full_command))
+}
+
+fn check_php_script(cmd: &analyzer::Command) -> Option<PermissionResult> {
     if cmd.name == "php" {
-        if let Some(result) = scripts::php::check_php_script(cmd) {
-            return Some(result);
-        }
+        return scripts::php::check_php_script(cmd);
     }
+    None
+}
+
+fn check_lua_script(cmd: &analyzer::Command) -> Option<PermissionResult> {
     if cmd.name == "lua" || cmd.name == "luajit" {
-        if let Some(result) = scripts::lua::check_lua_script(cmd) {
-            return Some(result);
-        }
+        return scripts::lua::check_lua_script(cmd);
     }
+    None
+}
+
+fn check_perl_script(cmd: &analyzer::Command) -> Option<PermissionResult> {
     if cmd.name == "perl" {
-        if let Some(result) = scripts::perl::check_perl_script(cmd) {
-            return Some(result);
-        }
+        return scripts::perl::check_perl_script(cmd);
     }
+    None
+}
+
+fn check_node_script(
+    cmd: &analyzer::Command,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+) -> Option<PermissionResult> {
     if cmd.name == "node" || cmd.name == "nodejs" {
-        if let Some(result) =
-            scripts::node::check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx)
-        {
-            return Some(result);
-        }
+        return scripts::node::check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx);
     }
+    None
+}
+
+fn check_ruby_script(cmd: &analyzer::Command) -> Option<PermissionResult> {
     if cmd.name == "ruby" {
-        if let Some(result) = scripts::ruby::check_ruby_script(cmd) {
-            return Some(result);
-        }
+        return scripts::ruby::check_ruby_script(cmd);
     }
+    None
+}
+
+fn check_awk_script(cmd: &analyzer::Command) -> Option<PermissionResult> {
     if matches!(cmd.name.as_str(), "awk" | "gawk" | "mawk") {
-        if let Some(result) = scripts::awk::check_awk_script(cmd) {
-            return Some(result);
-        }
+        return scripts::awk::check_awk_script(cmd);
     }
+    None
+}
+
+fn check_sed_script(
+    cmd: &analyzer::Command,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+) -> Option<PermissionResult> {
     if cmd.name == "sed" {
-        if let Some(result) = scripts::sed::check_sed_script(cmd, config, virtual_cwd) {
-            return Some(result);
-        }
+        return scripts::sed::check_sed_script(cmd, config, virtual_cwd);
     }
+    None
+}
+
+fn check_python_script(
+    cmd: &analyzer::Command,
+    config: &Config,
+    ctx: ExecContext,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    full_command: Option<&str>,
+) -> Option<PermissionResult> {
     if cmd.name.starts_with("python") {
         if let Some(result) = scripts::python::check_python_script(cmd, full_command, initial_cwd) {
             return Some(result);

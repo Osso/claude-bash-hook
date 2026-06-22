@@ -148,7 +148,11 @@ fn default_permission() -> String {
 }
 
 fn default_mysql_aliases() -> Vec<String> {
-    vec!["mysql".to_string(), "mariadb".to_string()]
+    vec![
+        "mysql".to_string(),
+        "mariadb".to_string(),
+        "mysql-gc".to_string(),
+    ]
 }
 
 /// A permission rule
