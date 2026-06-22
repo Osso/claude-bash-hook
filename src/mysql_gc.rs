@@ -54,13 +54,7 @@ fn server_from_args(args: &[String]) -> Option<String> {
 fn is_auto_approved_server(server: &str) -> bool {
     matches!(
         server,
-        "local"
-            | "prod"
-            | "external"
-            | "replication"
-            | "replication-root"
-            | "kubernetes-replication"
-            | "rocks"
+        "local" | "prod" | "external" | "do-managed" | "replication" | "replication-root" | "rocks"
     )
 }
 

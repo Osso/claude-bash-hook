@@ -31,6 +31,18 @@ fn external_redirect_allowed() {
 }
 
 #[test]
+fn do_managed_select_allowed() {
+    let config = test_config();
+    let result = analyze_command(
+        "mysql-gc -s do-managed -e 'SELECT 1'",
+        &config,
+        ExecContext::default(),
+        Some("/syncthing/Sync/Projects/globalcomix/gc"),
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
 fn prod_readonly_redirect_allowed() {
     let config = test_config();
     let result = analyze_command(
