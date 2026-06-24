@@ -87,9 +87,6 @@ enum Decision {
         #[serde(rename = "updatedPermissions", skip_serializing_if = "Vec::is_empty")]
         updated_permissions: Vec<AddRulesUpdate>,
     },
-    Deny {
-        message: String,
-    },
 }
 
 // ── Codex advice ─────────────────────────────────────────────────────────────

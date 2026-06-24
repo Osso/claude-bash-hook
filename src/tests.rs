@@ -833,6 +833,61 @@ fn test_ssh_remote_perl_inplace_edit_is_not_local_edit_denial() {
     assert!(!result.reason.contains("use Edit tool"));
 }
 
+#[test]
+fn test_php_readability_audit_allowed() {
+    let config = test_config();
+    let result = analyze_command(
+        "php-readability upload/src/XF/Mail/Mailer.php tests/Unit/XF/Mail/MailerTest.php --json",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+
+    assert_eq!(result.permission, Permission::Allow);
+    assert!(result.reason.contains("php-readability read-only audit"));
+}
+
+#[test]
+fn test_php_readability_absolute_path_allowed() {
+    let config = test_config();
+    let result = analyze_command(
+        "/home/osso/.cargo/bin/php-readability upload/src/XF/Mail/Mailer.php --json",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_php_readability_write_flags_ask() {
+    let config = test_config();
+
+    for command in [
+        "php-readability upload/src/XF/Mail/Mailer.php --fix",
+        "php-readability upload/src/XF/Mail/Mailer.php --write-plan",
+    ] {
+        let result = analyze_command(command, &config, ExecContext::default(), None);
+
+        assert_eq!(result.permission, Permission::Ask, "{command}");
+        assert!(result.reason.contains("php-readability write mode"));
+    }
+}
+
+#[test]
+fn test_direct_php_readability_python_script_not_allowed() {
+    let config = test_config();
+    let result = analyze_command(
+        "python3 /home/osso/AgentConfig/skills/php-readability/scripts/audit-repo.py upload/src/XF/Mail/Mailer.php --json",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+
+    assert_ne!(result.permission, Permission::Allow);
+}
+
 // Write-protected path guards (ask_write_paths) — end to end.
 
 fn write_guard_config() -> Config {

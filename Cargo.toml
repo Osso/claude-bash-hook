@@ -41,6 +41,10 @@ name = "claude-bash-hook-approval"
 path = "src/bin/approval_prompt.rs"
 
 [[bin]]
+name = "php-readability"
+path = "src/bin/php_readability.rs"
+
+[[bin]]
 name = "debug"
 path = "src/bin/debug.rs"
 

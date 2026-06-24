@@ -657,6 +657,7 @@ fn check_misc(
 ) -> Option<PermissionResult> {
     allow_magick_info(cmd)
         .or_else(|| magick::check_magick(cmd))
+        .or_else(|| check_php_readability(cmd))
         .or_else(|| allow_curl(cmd, config, ctx))
         .or_else(|| allow_help_request(cmd))
         .or_else(|| allow_version_request(cmd))
@@ -675,6 +676,23 @@ fn check_database_query(
 fn allow_magick_info(cmd: &analyzer::Command) -> Option<PermissionResult> {
     (cmd.name == "magick" && cmd.args.last().is_some_and(|arg| arg == "info:"))
         .then(|| allow_reason("magick with info: output"))
+}
+
+fn check_php_readability(cmd: &analyzer::Command) -> Option<PermissionResult> {
+    let name = cmd.name.rsplit('/').next().unwrap_or(&cmd.name);
+    if name != "php-readability" {
+        return None;
+    }
+
+    if has_any_arg(cmd, &["--fix", "--write-plan"]) {
+        return Some(PermissionResult {
+            permission: Permission::Ask,
+            reason: "php-readability write mode".to_string(),
+            suggestion: None,
+        });
+    }
+
+    Some(allow_reason("php-readability read-only audit"))
 }
 
 fn allow_curl(
