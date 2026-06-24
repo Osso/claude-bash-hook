@@ -2,6 +2,7 @@
 //!
 //! Walks the AST and extracts all commands with their arguments.
 
+use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
 /// Represents a single command extracted from the AST
@@ -21,6 +22,11 @@ pub struct AnalysisResult {
     /// File targets of output redirects (`>`, `>>`, `&>`, ...). Input
     /// redirects (`<`) are reads and excluded.
     pub write_redirects: Vec<String>,
+    /// Literal `VAR=value` assignments found in the command, mapping name to
+    /// value. Only constant literals are recorded; values built from
+    /// expansions or command substitution are omitted (they are not safely
+    /// resolvable statically).
+    pub var_values: HashMap<String, String>,
     /// Whether parsing succeeded
     pub success: bool,
     /// Error message if parsing failed
@@ -36,6 +42,7 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
         return AnalysisResult {
             commands: vec![],
             write_redirects: vec![],
+            var_values: HashMap::new(),
             success: false,
             error: Some(format!("Failed to set language: {}", e)),
         };
@@ -47,6 +54,7 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
             return AnalysisResult {
                 commands: vec![],
                 write_redirects: vec![],
+                var_values: HashMap::new(),
                 success: false,
                 error: Some("Failed to parse command".to_string()),
             };
@@ -61,6 +69,7 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
         return AnalysisResult {
             commands: vec![],
             write_redirects: vec![],
+            var_values: HashMap::new(),
             success: false,
             error: Some(error_msg),
         };
@@ -72,12 +81,63 @@ pub fn analyze(cmd: &str) -> AnalysisResult {
     let mut write_redirects = Vec::new();
     collect_write_redirects(root, cmd.as_bytes(), &mut write_redirects);
 
+    let mut var_values = HashMap::new();
+    collect_var_values(root, cmd.as_bytes(), &mut var_values);
+
     AnalysisResult {
         commands,
         write_redirects,
+        var_values,
         success: true,
         error: None,
     }
+}
+
+/// Recursively collect literal `VAR=value` assignments into `out` (name →
+/// value). Later assignments override earlier ones, matching shell semantics.
+/// Only constant literals are recorded; values containing expansions or command
+/// substitution are skipped because they cannot be resolved statically.
+fn collect_var_values(node: Node, source: &[u8], out: &mut HashMap<String, String>) {
+    if node.kind() == "variable_assignment"
+        && let Some(name) = node.child_by_field_name("name")
+        && let Some(value) = node.child_by_field_name("value")
+        && let Some(literal) = literal_value(value, source)
+    {
+        out.insert(get_text(name, source), literal);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_var_values(child, source, out);
+    }
+}
+
+/// Return the constant string value of an assignment's value node, or `None`
+/// when the value is not a static literal (e.g. interpolated or substituted).
+fn literal_value(node: Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "word" | "number" => Some(get_text(node, source)),
+        // Single-quoted: never interpolated, strip the surrounding quotes.
+        "raw_string" => Some(get_text(node, source).trim_matches('\'').to_string()),
+        // Double-quoted: literal only when it contains no expansions.
+        "string" => literal_double_quoted(node, source),
+        _ => None,
+    }
+}
+
+/// Concatenate the literal segments of a double-quoted `string` node, returning
+/// `None` if any child is an expansion or command substitution.
+fn literal_double_quoted(node: Node, source: &[u8]) -> Option<String> {
+    let mut value = String::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "string_content" => value.push_str(&get_text(child, source)),
+            "\"" => {}
+            _ => return None,
+        }
+    }
+    Some(value)
 }
 
 /// Recursively collect the file targets of output redirects (`>`, `>>`, `&>`,
@@ -220,6 +280,51 @@ fn get_text(node: Node, source: &[u8]) -> String {
     node.utf8_text(source).unwrap_or("").to_string()
 }
 
+/// Substitute `$name` and `${name}` references with their literal values from
+/// `vars`. Unknown variables are left untouched. Quoting is irrelevant here:
+/// the argument text retains any surrounding quotes, which downstream checks
+/// strip as needed.
+pub fn expand_known_vars(s: &str, vars: &HashMap<String, String>) -> String {
+    if vars.is_empty() || !s.contains('$') {
+        return s.to_string();
+    }
+
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find('$') {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + 1..];
+        match parse_var_ref(after) {
+            Some((name, consumed)) if vars.contains_key(name) => {
+                out.push_str(&vars[name]);
+                rest = &after[consumed..];
+            }
+            _ => {
+                out.push('$');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Parse a variable reference at the start of `after` (the text following a
+/// `$`). Returns the variable name and the number of bytes consumed, for both
+/// `${name}` and bare `$name` forms. Variable names are ASCII, so byte slicing
+/// stays on char boundaries.
+fn parse_var_ref(after: &str) -> Option<(&str, usize)> {
+    if let Some(braced) = after.strip_prefix('{') {
+        let end = braced.find('}')?;
+        return Some((&braced[..end], end + 2));
+    }
+    let len = after
+        .bytes()
+        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        .count();
+    (len > 0).then(|| (&after[..len], len))
+}
+
 fn is_inline_argument(child: Node) -> bool {
     matches!(
         child.kind(),
@@ -253,6 +358,60 @@ fn add_field_arguments(node: Node, source: &[u8], args: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_var_values_literal_forms() {
+        let result =
+            analyze("a=https://api.gcdev.site; b='single'; c=\"plain text\"; n=42; curl \"$a\"");
+        assert!(result.success);
+        assert_eq!(
+            result.var_values.get("a").map(String::as_str),
+            Some("https://api.gcdev.site")
+        );
+        assert_eq!(
+            result.var_values.get("b").map(String::as_str),
+            Some("single")
+        );
+        assert_eq!(
+            result.var_values.get("c").map(String::as_str),
+            Some("plain text")
+        );
+        assert_eq!(result.var_values.get("n").map(String::as_str), Some("42"));
+    }
+
+    #[test]
+    fn test_var_values_skips_dynamic() {
+        // Interpolated value and command substitution are not static literals.
+        let result = analyze("a=\"https://$h.site\"; b=$(hostname); echo hi");
+        assert!(result.success);
+        assert!(!result.var_values.contains_key("a"));
+        assert!(!result.var_values.contains_key("b"));
+    }
+
+    #[test]
+    fn test_var_values_later_wins() {
+        let result = analyze("x=1; x=2; echo hi");
+        assert_eq!(result.var_values.get("x").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn test_expand_known_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("api".to_string(), "https://api.gcdev.site".to_string());
+        assert_eq!(
+            expand_known_vars("\"$api/v1/x\"", &vars),
+            "\"https://api.gcdev.site/v1/x\""
+        );
+        assert_eq!(
+            expand_known_vars("${api}/v1", &vars),
+            "https://api.gcdev.site/v1"
+        );
+        // Unknown variables and bare dollars are left untouched.
+        assert_eq!(expand_known_vars("$unknown/x", &vars), "$unknown/x");
+        assert_eq!(expand_known_vars("price is $5", &vars), "price is $5");
+        // No prefix match: $apifoo is a different name, not $api + "foo".
+        assert_eq!(expand_known_vars("$apifoo", &vars), "$apifoo");
+    }
 
     #[test]
     fn test_simple_command() {

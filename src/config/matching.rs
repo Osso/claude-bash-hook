@@ -698,6 +698,7 @@ impl Config {
                 "--server",
             ],
             "sentry" => &["-s", "--slug"],
+            "npm" => &["--prefix", "-C", "--workspace", "-w"],
             _ => &[],
         }
     }

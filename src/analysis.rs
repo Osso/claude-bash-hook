@@ -49,7 +49,11 @@ pub fn analyze_with_piped_query(
     let mut most_restrictive: Option<PermissionResult> = None;
     let mut prev_cmd: Option<&analyzer::Command> = None;
 
-    for cmd in &analysis.commands {
+    // Resolve locally-assigned literal variables (e.g. `api=https://host; curl
+    // "$api/x"`) so host- and path-based checks see the real value.
+    let resolved = resolve_command_vars(&analysis.commands, &analysis.var_values);
+
+    for cmd in &resolved {
         let local_piped_query = extract_piped_query(prev_cmd);
         let piped_query = local_piped_query.as_deref().or(outer_piped_query);
         let result = check_single_command(
@@ -69,13 +73,36 @@ pub fn analyze_with_piped_query(
         prev_cmd = Some(cmd);
     }
 
-    if let Some(redirect_result) =
-        check_write_redirects(&analysis.write_redirects, config, initial_cwd)
-    {
+    let redirects: Vec<String> = analysis
+        .write_redirects
+        .iter()
+        .map(|target| analyzer::expand_known_vars(target, &analysis.var_values))
+        .collect();
+    if let Some(redirect_result) = check_write_redirects(&redirects, config, initial_cwd) {
         most_restrictive = Some(merge_restrictive(most_restrictive, redirect_result));
     }
 
     allow_in_bypass(most_restrictive.unwrap_or_else(default_allow), ctx)
+}
+
+/// Return copies of `commands` with `$name`/`${name}` references expanded from
+/// the literal assignments in `vars`. When there are no known variables the
+/// commands are cloned unchanged.
+fn resolve_command_vars(
+    commands: &[analyzer::Command],
+    vars: &std::collections::HashMap<String, String>,
+) -> Vec<analyzer::Command> {
+    commands
+        .iter()
+        .map(|cmd| analyzer::Command {
+            name: analyzer::expand_known_vars(&cmd.name, vars),
+            args: cmd
+                .args
+                .iter()
+                .map(|arg| analyzer::expand_known_vars(arg, vars))
+                .collect(),
+        })
+        .collect()
 }
 
 /// Force a prompt when an output redirect (`>`, `>>`) targets a write-protected

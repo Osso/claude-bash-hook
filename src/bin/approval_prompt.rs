@@ -1427,20 +1427,17 @@ mod tests {
             cwd: None,
         };
         let d = ApprovalServer::decide_safe(&params, "read-only".into());
-        match d {
-            Decision::Allow {
-                updated_permissions,
-                ..
-            } => {
-                assert_eq!(updated_permissions.len(), 1);
-                assert_eq!(updated_permissions[0].rules[0].tool_name, "Bash");
-                assert_eq!(
-                    updated_permissions[0].rules[0].rule_content.as_deref(),
-                    Some("ls")
-                );
-            }
-            _ => panic!("expected Allow"),
-        }
+        let Decision::Allow {
+            updated_permissions,
+            ..
+        } = d;
+
+        assert_eq!(updated_permissions.len(), 1);
+        assert_eq!(updated_permissions[0].rules[0].tool_name, "Bash");
+        assert_eq!(
+            updated_permissions[0].rules[0].rule_content.as_deref(),
+            Some("ls")
+        );
     }
 
     #[test]

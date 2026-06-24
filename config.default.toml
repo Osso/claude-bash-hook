@@ -65,18 +65,18 @@ commands = [
     "pwd", "whoami", "hostname", "uname", "id", "groups",
     "ps", "top", "htop", "df", "du", "free", "uptime", "date",
     "grep", "rg", "find", "fd", "fdfind", "locate", "wc", "diff", "sort", "uniq", "shuf", "which", "whereis", "file", "tr", "cut", "paste", "col", "basename", "dirname", "readlink", "base64", "xxd", "od", "zcat", "zgrep", "gzip", "gzip -d", "gunzip", "bsdtar -xOf", "bsdtar -tvf", "bsdtar -tf", "comm", "command -v",
-    "jq", "yq", "xq", "bc", "python3 -m json.tool",
+    "jq", "yq", "xq", "bc", "python3 -m json.tool", "python -m unittest discover tests",
     "cd", "echo", "read", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false", "touch", "unset", "break", "continue", "return", "exit", "wait",
     "sd", "perl -pe",  # inline only; -i variants denied below; bare `perl -e`/`awk`/`sed` analyzed for side effects
     "lsblk", "findmnt", "ldd", "nm", "nm -D", "readelf", "objdump", "lspci", "lscpu", "lsusb", "pkg-config --list-all", "conntrack -L", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "pdftotext", "magick identify", "infocmp", "crontab -l", "xkbcli list", "btrfs subvolume list", "btrfs filesystem df", "btrfs filesystem du", "btrfs filesystem show", "btrfs filesystem usage", "gemini --version", "rfkill list", "blkid", "nvme id-ns", "sfdisk -l", "efibootmgr -v", "mokutil --sb-state", "bootctl status", "bootctl list", "rustc --print", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list", "coredumpctl list", "iptables -L", "varlinkctl info", "varlinkctl introspect",
-    "sleep", "disown", "jobs", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "claude-grep", "codex-grep", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves", "tokei",
+    "sleep", "disown", "jobs", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "claude-memory search", "claude-grep", "codex-grep", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves", "tokei", "rclone lsf", "depot whoami",
     "curl -s https://ifconfig.me",
     "quickshell ipc query",
     "php -l", "dpkg -l", "dpkg -S",
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
-    "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm root", "npm run typecheck", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install", "composer show", "composer why",
+    "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm root", "npm test", "npm run test", "npm run lint", "npm run check", "npm run typecheck", "npm --prefix frontend/web-ui test -- useTrackPageView --run", "npm --prefix frontend/web-ui test -- reader.test useTrackPageView --run", "npm --prefix frontend/web-ui test -- useReaderPaywall reader.test useTrackPageView --run", "npm --prefix frontend/web-ui run typecheck", "npx eslint", "pnpm exec vitest", "pnpm exec tsc", "pnpm exec eslint", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install", "composer show", "composer why",
     "mago lint", "mago config", "phpstan analyze",
-    "shellharden", "shfmt",
+    "shellharden", "shfmt", "ts-readability",
     "youtube search", "youtube info", "youtube playlist",
 ]
 permission = "allow"
@@ -87,7 +87,7 @@ reason = "read-only commands"
 commands = [
     "git status", "git log", "git diff", "git diff-tree", "git branch",
     "git remote", "git show", "git rev-parse", "git describe", "git merge-base", "git ls-files", "git ls-remote", "git ls-tree", "git tag", "git cat-file", "git check-ignore",
-    "git config --get alias.diff",
+    "git config --get", "git config --get-all",
 ]
 permission = "allow"
 main_thread_permission = "allow"
@@ -119,7 +119,7 @@ commands = [
     "docker context ls", "docker context inspect", "docker context show",
     "docker image ls", "docker image inspect", "docker image history",
     "docker container ls", "docker container inspect", "docker container logs", "docker container top", "docker container stats",
-    "docker compose ps", "docker compose logs", "docker compose config", "docker compose top", "docker compose images", "docker compose port", "docker compose version",
+    "docker compose ps", "docker compose logs", "docker compose config", "docker compose top", "docker compose images", "docker compose port", "docker compose version", "docker compose restart", "docker compose up", "docker compose down",
 ]
 permission = "allow"
 reason = "docker read-only and safe operations"
@@ -134,7 +134,7 @@ reason = "docker destructive"
 [[rules]]
 commands = [
     "kubectl get", "kubectl describe", "kubectl logs",
-    "kubectl explain", "kubectl api-resources", "kubectl top", "kubectl cluster-info",
+    "kubectl explain", "kubectl api-resources", "kubectl top", "kubectl cluster-info", "kubectl kustomize",
     "kubectl rollout history", "kubectl rollout status",
     "kubectl cp",
 ]
@@ -277,6 +277,12 @@ reason = "terraform read-only"
 commands = ["cargo check", "cargo build", "cargo test", "cargo run", "cargo doc", "cargo search", "cargo tree", "cargo metadata", "cargo fmt", "cargo clippy", "cargo new", "cargo init", "cargo outdated", "cargo info", "cargo clean", "uv init", "ruff"]
 permission = "allow"
 reason = "cargo dev commands"
+
+[[rules]]
+commands = ["cargo llvm-cov", "cargo llvm-cov report", "cargo +nightly llvm-cov", "rustup run nightly cargo llvm-cov", "/usr/bin/llvm-profdata merge", "/usr/bin/llvm-cov report", "llvm-cov report"]
+permission = "allow"
+main_thread_permission = "allow"
+reason = "cargo coverage report"
 
 # pacman read-only (query and search)
 [[rules]]

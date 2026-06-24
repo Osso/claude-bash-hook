@@ -160,6 +160,30 @@ fn test_git_with_path_flag() {
 }
 
 #[test]
+fn test_git_config_get_read_only_flags_allowed() {
+    let config = test_config();
+    for args in [
+        ["config", "--get", "alias.diff"],
+        ["config", "--get", "user.name"],
+        ["config", "--get-all", "remote.origin.url"],
+    ] {
+        let args = args.map(String::from);
+        let result = config.check_command("git", &args);
+        assert_eq!(result.permission, Permission::Allow);
+    }
+}
+
+#[test]
+fn test_git_config_write_not_allowed_by_read_rule() {
+    let config = test_config();
+    let result = config.check_command(
+        "git",
+        &["config".into(), "user.name".into(), "Codex".into()],
+    );
+    assert_eq!(result.permission, Permission::Passthrough);
+}
+
+#[test]
 fn test_kubectl_with_namespace() {
     let config = test_config();
     // kubectl -n namespace get pods should match "kubectl get"
