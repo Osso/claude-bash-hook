@@ -87,6 +87,7 @@ reason = "read-only commands"
 commands = [
     "git status", "git log", "git diff", "git diff-tree", "git branch",
     "git remote", "git show", "git rev-parse", "git describe", "git merge-base", "git ls-files", "git ls-remote", "git ls-tree", "git tag", "git cat-file", "git check-ignore",
+    "git config --get alias.diff",
 ]
 permission = "allow"
 main_thread_permission = "allow"

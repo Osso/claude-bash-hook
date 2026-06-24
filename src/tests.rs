@@ -888,6 +888,19 @@ fn test_direct_php_readability_python_script_not_allowed() {
     assert_ne!(result.permission, Permission::Allow);
 }
 
+#[test]
+fn test_git_config_get_alias_diff_allowed() {
+    let config = test_config();
+    let result = analyze_command(
+        "git config --get alias.diff",
+        &config,
+        ExecContext::default(),
+        None,
+    );
+
+    assert_eq!(result.permission, Permission::Allow);
+}
+
 // Write-protected path guards (ask_write_paths) — end to end.
 
 fn write_guard_config() -> Config {
