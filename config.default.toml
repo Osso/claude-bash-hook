@@ -76,7 +76,7 @@ commands = [
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
     "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm root", "npm test", "npm run test", "npm run lint", "npm run check", "npm run typecheck", "npm --prefix frontend/web-ui test -- useTrackPageView --run", "npm --prefix frontend/web-ui test -- reader.test useTrackPageView --run", "npm --prefix frontend/web-ui test -- useReaderPaywall reader.test useTrackPageView --run", "npm --prefix frontend/web-ui run typecheck", "npx eslint", "pnpm exec vitest", "pnpm exec tsc", "pnpm exec eslint", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install", "composer show", "composer why",
     "mago lint", "mago config", "phpstan analyze",
-    "shellharden", "shfmt", "ts-readability",
+    "shellharden", "shfmt", "ts-readability", "rustup component list --installed",
     "youtube search", "youtube info", "youtube playlist",
 ]
 permission = "allow"
@@ -283,6 +283,11 @@ commands = ["cargo llvm-cov", "cargo llvm-cov report", "cargo +nightly llvm-cov"
 permission = "allow"
 main_thread_permission = "allow"
 reason = "cargo coverage report"
+
+[[rules]]
+commands = ["rustc"]
+permission = "allow"
+reason = "Rust compiler"
 
 # pacman read-only (query and search)
 [[rules]]
