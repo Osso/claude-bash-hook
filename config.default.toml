@@ -69,18 +69,26 @@ commands = [
     "cd", "echo", "read", "mkdir", "cp", "mv", "chmod", "ln", "rmdir", "yes", "true", "false", "touch", "unset", "break", "continue", "return", "exit", "wait",
     "sd", "perl -pe",  # inline only; -i variants denied below; bare `perl -e`/`awk`/`sed` analyzed for side effects
     "lsblk", "findmnt", "ldd", "nm", "nm -D", "readelf", "objdump", "lspci", "lscpu", "lsusb", "pkg-config --list-all", "conntrack -L", "strings", "lsof", "dmesg", "lsmod", "modinfo", "rocm-smi", "iostat", "pdfinfo", "pdftotext", "magick identify", "infocmp", "crontab -l", "xkbcli list", "btrfs subvolume list", "btrfs filesystem df", "btrfs filesystem du", "btrfs filesystem show", "btrfs filesystem usage", "gemini --version", "rfkill list", "blkid", "nvme id-ns", "sfdisk -l", "efibootmgr -v", "mokutil --sb-state", "bootctl status", "bootctl list", "rustc --print", "claude --version", "ollama --version", "bluetoothctl show", "bluetoothctl devices", "vulkaninfo", "nft list", "coredumpctl list", "iptables -L", "varlinkctl info", "varlinkctl introspect",
-    "sleep", "disown", "jobs", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "claude-memory search", "claude-grep", "codex-grep", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves", "tokei", "rclone lsf", "depot whoami",
+    "sleep", "disown", "jobs", "ping", "dig", "dog", "journalctl", "ollama list", "pgrep", "stat", "apt-cache", "tree", "printenv", "env", "claude-bash-hook", "claude-memory search", "claude-grep", "codex-grep", "codex features list", "ss", "netstat", "wget", "mysqlbinlog", "brew leaves", "tokei", "rclone lsf", "rclone listremotes", "depot whoami",
     "curl -s https://ifconfig.me",
     "quickshell ipc query",
     "php -l", "dpkg -l", "dpkg -S",
     "openssl s_client -connect", "openssl x509 -noout -text", "openssl x509 -noout -dates",
-    "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm root", "npm test", "npm run test", "npm run lint", "npm run check", "npm run typecheck", "npm --prefix frontend/web-ui test -- useTrackPageView --run", "npm --prefix frontend/web-ui test -- reader.test useTrackPageView --run", "npm --prefix frontend/web-ui test -- useReaderPaywall reader.test useTrackPageView --run", "npm --prefix frontend/web-ui run typecheck", "npx eslint", "pnpm exec vitest", "pnpm exec tsc", "pnpm exec eslint", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install", "composer show", "composer why",
+    "flatpak list", "snap list", "niri validate", "kitty --version", "yazi --help", "npm --version", "npm root", "npm test", "npm run test", "npm run test:coding-agent", "npm run lint", "npm run check", "npm run typecheck", "npm --prefix frontend/web-ui test -- useTrackPageView --run", "npm --prefix frontend/web-ui test -- reader.test useTrackPageView --run", "npm --prefix frontend/web-ui test -- useReaderPaywall reader.test useTrackPageView --run", "npm --prefix frontend/web-ui run typecheck", "npx eslint", "pnpm exec vitest", "pnpm exec tsc", "pnpm exec eslint", "wezterm show-keys", "wezterm ls-fonts", "xdg-settings get", "xdg-mime query", "composer", "composer install", "composer show", "composer why",
     "mago lint", "mago config", "phpstan analyze",
+    "uv run --with pytest --with fastapi --with httpx --with numpy --with uvicorn pytest tests/test_http_api.py",
     "shellharden", "shfmt", "ts-readability", "rustup component list --installed",
     "youtube search", "youtube info", "youtube playlist",
 ]
 permission = "allow"
 reason = "read-only commands"
+
+# GlobalComix CI cleanup
+[[rules]]
+commands = ["./scripts/ci-clean.sh"]
+cwd = "/syncthing/Sync/Projects/globalcomix/gc"
+permission = "allow"
+reason = "GlobalComix CI cleanup script"
 
 # Git read-only operations
 [[rules]]
@@ -110,7 +118,7 @@ reason = "safe git operations"
 # Docker read-only and safe operations
 [[rules]]
 commands = [
-    "docker ps", "docker logs", "docker inspect", "docker images", "docker stats", "docker info",
+    "docker ps", "docker logs", "docker inspect", "docker manifest inspect", "docker images", "docker stats", "docker info",
     "docker top", "docker port", "docker diff", "docker history", "docker events", "docker version",
     "docker pull", "docker build", "docker tag", "docker search",
     "docker network ls", "docker network inspect",
@@ -314,7 +322,7 @@ commands = [
     "doctl compute droplet list", "doctl compute droplet get",
     "doctl compute image list", "doctl compute region list", "doctl compute size list",
     "doctl compute ssh-key list", "doctl compute volume list",
-    "doctl kubernetes cluster list", "doctl kubernetes cluster get",
+    "doctl kubernetes cluster list", "doctl kubernetes cluster get", "doctl kubernetes cluster node-pool list",
     "doctl databases list", "doctl databases get",
     "doctl vpcs list", "doctl vpcs get",
 ]
@@ -339,6 +347,11 @@ reason = "file deletion"
 commands = ["sed -i", "perl -i", "perl -pi", "perl -pie"]
 permission = "deny"
 reason = "in-place edit; use Edit tool or mcp__regex-replace__regex_replace instead"
+
+[[rules]]
+commands = ["pdf render"]
+permission = "allow"
+reason = "PDF rendering"
 
 # Disk operations - deny
 [[rules]]

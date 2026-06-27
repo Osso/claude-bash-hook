@@ -36,5 +36,9 @@ pattern = "claude-agent.globalcomixdev.com"
 permission = "allow"
 
 [[hosts]]
+pattern = "*.globalcomixdev.com"
+permission = "allow"
+
+[[hosts]]
 pattern = "*"
 permission = "ask"

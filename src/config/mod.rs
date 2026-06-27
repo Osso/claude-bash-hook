@@ -15,6 +15,8 @@ mod tests;
 #[cfg(test)]
 mod tests_aliases;
 #[cfg(test)]
+mod tests_globalcomix;
+#[cfg(test)]
 mod tests_npm;
 #[cfg(test)]
 mod tests_overrides;
