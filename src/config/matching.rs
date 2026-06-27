@@ -289,7 +289,9 @@ impl Config {
                 }
             } else {
                 // This is a subcommand - check against next subcommand in sequence
-                if subcommand_idx >= subcommands.len() || subcommands[subcommand_idx] != *part {
+                if subcommand_idx >= subcommands.len()
+                    || !self.subcommand_matches(part, &subcommands[subcommand_idx])
+                {
                     return false;
                 }
                 subcommand_idx += 1;
@@ -297,6 +299,14 @@ impl Config {
         }
 
         true
+    }
+
+    fn subcommand_matches(&self, pattern: &str, actual: &str) -> bool {
+        if pattern.contains('*') {
+            return glob_match(pattern, actual);
+        }
+
+        pattern == actual
     }
 
     /// Find all subcommands (positional args), skipping flags and their arguments
