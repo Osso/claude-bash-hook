@@ -215,6 +215,55 @@ fn test_exact_rule_rejects_extra_arguments() {
 }
 
 #[test]
+fn test_default_config_allows_exact_persistent_loginctl_session_probe() {
+    let config = test_config();
+    let result = config.check_command(
+        "loginctl",
+        &[
+            "show-session".into(),
+            "self".into(),
+            "-p".into(),
+            "Remote".into(),
+            "-p".into(),
+            "Class".into(),
+            "-p".into(),
+            "Type".into(),
+            "-p".into(),
+            "State".into(),
+        ],
+    );
+
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_default_config_loginctl_rule_rejects_broader_commands() {
+    let config = test_config();
+
+    let result = config.check_command(
+        "loginctl",
+        &[
+            "show-session".into(),
+            "self".into(),
+            "-p".into(),
+            "Remote".into(),
+            "-p".into(),
+            "Class".into(),
+            "-p".into(),
+            "Type".into(),
+            "-p".into(),
+            "State".into(),
+            "-p".into(),
+            "Name".into(),
+        ],
+    );
+    assert_eq!(result.permission, Permission::Passthrough);
+
+    let result = config.check_command("loginctl", &["terminate-session".into(), "self".into()]);
+    assert_eq!(result.permission, Permission::Passthrough);
+}
+
+#[test]
 fn test_kubectl_with_namespace() {
     let config = test_config();
     // kubectl -n namespace get pods should match "kubectl get"

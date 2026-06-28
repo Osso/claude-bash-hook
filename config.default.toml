@@ -236,6 +236,14 @@ commands = [
 permission = "allow"
 reason = "ip read-only"
 
+# loginctl session inspection approved by Pi Allow always
+[[rules]]
+commands = ["loginctl show-session self -p Remote -p Class -p Type -p State"]
+exact = true
+permission = "allow"
+main_thread_permission = "allow"
+reason = "read current login session properties"
+
 # systemctl read-only
 [[rules]]
 commands = [
