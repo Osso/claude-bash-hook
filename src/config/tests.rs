@@ -184,6 +184,37 @@ fn test_git_config_write_not_allowed_by_read_rule() {
 }
 
 #[test]
+fn test_exact_rule_rejects_extra_arguments() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "passthrough"
+        [[rules]]
+        commands = ["git symbolic-ref refs/remotes/origin/HEAD"]
+        exact = true
+        permission = "allow"
+        reason = "read symbolic ref"
+    "#,
+    )
+    .unwrap();
+
+    let result = config.check_command(
+        "git",
+        &["symbolic-ref".into(), "refs/remotes/origin/HEAD".into()],
+    );
+    assert_eq!(result.permission, Permission::Allow);
+
+    let result = config.check_command(
+        "git",
+        &[
+            "symbolic-ref".into(),
+            "refs/remotes/origin/HEAD".into(),
+            "refs/remotes/origin/main".into(),
+        ],
+    );
+    assert_eq!(result.permission, Permission::Passthrough);
+}
+
+#[test]
 fn test_kubectl_with_namespace() {
     let config = test_config();
     // kubectl -n namespace get pods should match "kubectl get"

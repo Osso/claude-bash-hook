@@ -901,6 +901,45 @@ fn test_git_config_get_alias_diff_allowed() {
     assert_eq!(result.permission, Permission::Allow);
 }
 
+#[test]
+fn test_pi_origin_head_symbolic_ref_allowed() {
+    let config = test_config();
+    let result = analyze_command(
+        "git symbolic-ref refs/remotes/origin/HEAD || true",
+        &config,
+        ExecContext::default(),
+        Some("/home/osso/Repos/pi"),
+    );
+
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_pi_origin_head_symbolic_ref_rejects_write_form() {
+    let config = test_config();
+    let result = analyze_command(
+        "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main || true",
+        &config,
+        ExecContext::default(),
+        Some("/home/osso/Repos/pi"),
+    );
+
+    assert_eq!(result.permission, Permission::Passthrough);
+}
+
+#[test]
+fn test_pi_origin_head_symbolic_ref_cwd_scoped() {
+    let config = test_config();
+    let result = analyze_command(
+        "git symbolic-ref refs/remotes/origin/HEAD || true",
+        &config,
+        ExecContext::default(),
+        Some("/tmp"),
+    );
+
+    assert_eq!(result.permission, Permission::Passthrough);
+}
+
 // Write-protected path guards (ask_write_paths) — end to end.
 
 fn write_guard_config() -> Config {

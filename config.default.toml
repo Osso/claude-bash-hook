@@ -90,6 +90,15 @@ cwd = "/syncthing/Sync/Projects/globalcomix/gc"
 permission = "allow"
 reason = "GlobalComix CI cleanup script"
 
+# Pi origin HEAD lookup
+[[rules]]
+commands = ["git symbolic-ref refs/remotes/origin/HEAD"]
+cwd = "/home/osso/Repos/pi"
+exact = true
+permission = "allow"
+main_thread_permission = "allow"
+reason = "read Pi origin HEAD symbolic ref"
+
 # Git read-only operations
 [[rules]]
 commands = [

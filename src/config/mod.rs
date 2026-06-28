@@ -198,6 +198,10 @@ pub struct Rule {
     #[serde(default)]
     pub cwd: Option<String>,
 
+    /// Require the command arguments to match exactly, not as a prefix.
+    #[serde(default)]
+    pub exact: bool,
+
     /// Options that take arguments (for subcommand detection)
     #[serde(default)]
     pub opts_with_args: Vec<String>,

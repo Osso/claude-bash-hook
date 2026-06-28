@@ -150,6 +150,7 @@ impl Config {
         cwd: Option<&str>,
         rule_cwd: &str,
         rule_opts: &[String],
+        exact: bool,
     ) -> bool {
         let Some(cwd) = cwd else {
             return false;
@@ -164,7 +165,7 @@ impl Config {
         };
 
         if !pattern_cmd.contains('/') && !name.contains('/') {
-            return self.matches_pattern(pattern, name, args, rule_opts);
+            return self.matches_pattern(pattern, name, args, rule_opts, exact);
         }
 
         let name_normalized = name.strip_prefix("./").unwrap_or(name);
@@ -178,7 +179,11 @@ impl Config {
             return false;
         }
 
-        pattern_parts.len() == 1 || self.matches_pattern(pattern, name_normalized, args, rule_opts)
+        if pattern_parts.len() == 1 {
+            return !exact || args.is_empty();
+        }
+
+        self.matches_pattern(pattern, name_normalized, args, rule_opts, exact)
     }
 
     /// Check if current working directory matches the pattern
@@ -227,15 +232,16 @@ impl Config {
         args: &[String],
         cwd: Option<&str>,
         rule_opts: &[String],
+        exact: bool,
     ) -> bool {
-        if self.matches_pattern(pattern, name, args, rule_opts) {
+        if self.matches_pattern(pattern, name, args, rule_opts, exact) {
             return true;
         }
 
         let Some(relative) = self.relative_name_from_cwd(name, pattern, cwd) else {
             return false;
         };
-        self.matches_pattern(pattern, &relative, args, rule_opts)
+        self.matches_pattern(pattern, &relative, args, rule_opts, exact)
     }
 
     /// Check if a command matches a pattern
@@ -249,6 +255,7 @@ impl Config {
         name: &str,
         args: &[String],
         rule_opts: &[String],
+        exact: bool,
     ) -> bool {
         let parts: Vec<&str> = pattern.split_whitespace().collect();
 
@@ -269,6 +276,10 @@ impl Config {
         // First part must match command name (or its basename)
         if pattern_cmd != normalized_name && pattern_cmd != cmd_basename {
             return false;
+        }
+
+        if exact {
+            return self.matches_exact_parts(&parts, args);
         }
 
         if parts.len() == 1 {
@@ -299,6 +310,17 @@ impl Config {
         }
 
         true
+    }
+
+    fn matches_exact_parts(&self, parts: &[&str], args: &[String]) -> bool {
+        args.len() == parts.len().saturating_sub(1)
+            && args.iter().zip(&parts[1..]).all(|(actual, pattern)| {
+                if pattern.contains('*') {
+                    glob_match(pattern, actual)
+                } else {
+                    actual == pattern
+                }
+            })
     }
 
     fn subcommand_matches(&self, pattern: &str, actual: &str) -> bool {
@@ -439,10 +461,11 @@ impl Config {
                 cwd,
                 rule_cwd,
                 &rule.opts_with_args,
+                rule.exact,
             );
         }
 
-        self.matches_pattern_with_cwd(pattern, name, args, cwd, &rule.opts_with_args)
+        self.matches_pattern_with_cwd(pattern, name, args, cwd, &rule.opts_with_args, rule.exact)
     }
 
     fn rule_match_result(
@@ -530,7 +553,7 @@ impl Config {
         name: &str,
         args: &[String],
     ) -> bool {
-        self.matches_pattern(pattern, name, args, &rule.opts_with_args)
+        self.matches_pattern(pattern, name, args, &rule.opts_with_args, rule.exact)
             && rule
                 .cwd
                 .as_deref()
