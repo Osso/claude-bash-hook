@@ -458,13 +458,45 @@ fn emit_decision(
     );
 }
 
-/// Analyze a bash/nushell command, apply access mode, resolve passthrough.
+type PassthroughClassifier = fn(&str, Option<&str>) -> Option<PermissionResult>;
+
+fn classify_bash_passthrough(
+    result: PermissionResult,
+    command: &str,
+    cwd: Option<&str>,
+    config: &Config,
+    is_nushell: bool,
+    classifier: PassthroughClassifier,
+) -> PermissionResult {
+    if is_nushell || !config.passthrough_llm || result.permission != Permission::Passthrough {
+        return result;
+    }
+    classifier(command, cwd).unwrap_or(result)
+}
+
+/// Analyze a bash/nushell command, classify bash passthrough, apply access mode, resolve passthrough.
 /// Returns None if passthrough (caller should exit silently).
 fn analyze_and_resolve(
     hook_input: &HookInput,
     config: &Config,
     command: &str,
     is_nushell: bool,
+) -> Option<PermissionResult> {
+    analyze_and_resolve_with_classifier(
+        hook_input,
+        config,
+        command,
+        is_nushell,
+        advice::classify_passthrough,
+    )
+}
+
+fn analyze_and_resolve_with_classifier(
+    hook_input: &HookInput,
+    config: &Config,
+    command: &str,
+    is_nushell: bool,
+    classifier: PassthroughClassifier,
 ) -> Option<PermissionResult> {
     let ctx = ExecContext {
         edit_mode: edits_allowed(hook_input.effective_permission_mode()),
@@ -485,12 +517,16 @@ fn analyze_and_resolve(
     } else {
         analysis::analyze_command(command, config, ctx, hook_input.cwd.as_deref())
     };
+    let result = classify_bash_passthrough(
+        result,
+        command,
+        hook_input.cwd.as_deref(),
+        config,
+        is_nushell,
+        classifier,
+    );
     let result = apply_access_mode_result(result, access_mode.as_deref());
-    let resolved = resolve_passthrough(result, is_nushell);
-    if resolved.is_none() && !is_nushell && config.passthrough_llm {
-        return advice::classify_passthrough(command, hook_input.cwd.as_deref());
-    }
-    resolved
+    resolve_passthrough(result, is_nushell)
 }
 
 fn session_has_subagents(session_id: Option<&str>) -> bool {

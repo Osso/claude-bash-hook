@@ -1,9 +1,9 @@
 use crate::config::{Config, Permission};
 use crate::{
-    Harness, HookInput, analyze_and_resolve, apply_access_mode_permission,
-    apply_access_mode_result, build_codex_hook_output, build_hook_output, edits_allowed,
-    handle_subagent_event, parse_harness_args, parse_hook_input, permission_name,
-    resolve_passthrough, serialize_codex_hook_output, serialize_hook_output,
+    Harness, HookInput, analyze_and_resolve, analyze_and_resolve_with_classifier,
+    apply_access_mode_permission, apply_access_mode_result, build_codex_hook_output,
+    build_hook_output, edits_allowed, handle_subagent_event, parse_harness_args, parse_hook_input,
+    permission_name, resolve_passthrough, serialize_codex_hook_output, serialize_hook_output,
     serialize_hook_output_for_harness,
 };
 use serde_json::json;
@@ -11,6 +11,41 @@ use std::path::Path;
 
 fn test_config() -> Config {
     Config::load(Path::new("config.default.toml")).expect("Failed to load test config")
+}
+
+fn llm_passthrough_config() -> Config {
+    toml::from_str(
+        r#"
+        default = "passthrough"
+        passthrough_llm = true
+    "#,
+    )
+    .expect("test config")
+}
+
+fn mocked_safe_classifier(
+    _command: &str,
+    _cwd: Option<&str>,
+) -> Option<crate::config::PermissionResult> {
+    Some(crate::config::PermissionResult {
+        permission: Permission::Allow,
+        reason: "mocked SAFE".to_string(),
+        suggestion: None,
+    })
+}
+
+fn mocked_unsure_classifier(
+    _command: &str,
+    _cwd: Option<&str>,
+) -> Option<crate::config::PermissionResult> {
+    None
+}
+
+fn panicking_classifier(
+    _command: &str,
+    _cwd: Option<&str>,
+) -> Option<crate::config::PermissionResult> {
+    panic!("nushell should not use passthrough LLM classifier")
 }
 
 #[test]
@@ -315,6 +350,79 @@ fn test_analyze_and_resolve_upgrades_passthrough_in_nushell() {
     let result =
         analyze_and_resolve(&hook_input, &config, "rm -rf /", true).expect("nushell result");
     assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_nushell_passthrough_llm_still_asks_without_classifier() {
+    let config = llm_passthrough_config();
+    let hook_input: HookInput = serde_json::from_value(json!({
+        "tool_name": "mcp__nushell__execute",
+        "tool_input": { "command": "rm -rf /" }
+    }))
+    .expect("hook input");
+
+    let result = analyze_and_resolve_with_classifier(
+        &hook_input,
+        &config,
+        "rm -rf /",
+        true,
+        panicking_classifier,
+    )
+    .expect("nushell passthrough should become ask");
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_supervised_passthrough_llm_safe_allows_before_access_mode_ask() {
+    let config = llm_passthrough_config();
+    let hook_input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "some_tool --flag" },
+        "access_mode": "supervised"
+    }))
+    .expect("hook input");
+
+    let result = analyze_and_resolve_with_classifier(
+        &hook_input,
+        &config,
+        "some_tool --flag",
+        false,
+        mocked_safe_classifier,
+    )
+    .expect("safe LLM classification should allow");
+
+    assert_eq!(result.permission, Permission::Allow);
+    assert_eq!(result.reason, "mocked SAFE");
+}
+
+#[test]
+fn test_supervised_passthrough_llm_unsure_still_asks() {
+    let config = llm_passthrough_config();
+    let hook_input: HookInput = serde_json::from_value(json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "some_tool --flag" },
+        "access_mode": "supervised"
+    }))
+    .expect("hook input");
+
+    let result = analyze_and_resolve_with_classifier(
+        &hook_input,
+        &config,
+        "some_tool --flag",
+        false,
+        mocked_unsure_classifier,
+    )
+    .expect("supervised passthrough should ask when LLM is unsure");
+
+    assert_eq!(result.permission, Permission::Ask);
+    assert!(
+        result
+            .reason
+            .contains("access_mode=supervised upgraded passthrough to ask"),
+        "{}",
+        result.reason
+    );
 }
 
 #[test]
