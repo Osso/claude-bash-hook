@@ -540,7 +540,7 @@ fn check_scripting_inner(
     check_php_script(cmd)
         .or_else(|| check_lua_script(cmd))
         .or_else(|| check_perl_script(cmd))
-        .or_else(|| check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx))
+        .or_else(|| check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx, full_command))
         .or_else(|| check_ruby_script(cmd))
         .or_else(|| check_awk_script(cmd))
         .or_else(|| check_sed_script(cmd, config, virtual_cwd))
@@ -574,9 +574,17 @@ fn check_node_script(
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     ctx: ExecContext,
+    full_command: Option<&str>,
 ) -> Option<PermissionResult> {
     if cmd.name == "node" || cmd.name == "nodejs" {
-        return scripts::node::check_node_script(cmd, config, virtual_cwd, initial_cwd, ctx);
+        return scripts::node::check_node_script(
+            cmd,
+            full_command,
+            config,
+            virtual_cwd,
+            initial_cwd,
+            ctx,
+        );
     }
     None
 }

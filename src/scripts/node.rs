@@ -1,4 +1,5 @@
-//! Node.js inline script analysis for `node -e` / `node -p` (`--eval`/`--print`).
+//! Node.js inline script analysis for `node -e` / `node -p` (`--eval`/`--print`)
+//! and literal `node - <<TAG` heredoc stdin scripts.
 //!
 //! Node's API is too large to allowlist, so we use a denylist: inline code that
 //! writes/deletes files, opens the network, or evals code is routed to `ask`.
@@ -84,26 +85,54 @@ fn extract_node_code(cmd: &Command) -> Option<String> {
     let mut pieces: Vec<String> = Vec::new();
     let mut iter = cmd.args.iter();
     while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "-e" | "--eval" | "-p" | "--print" => {
-                if let Some(code) = iter.next() {
-                    pieces.push(code.clone());
-                }
-            }
-            _ => {
-                for prefix in ["--eval=", "--print=", "-e", "-p"] {
-                    if let Some(code) = arg.strip_prefix(prefix) {
-                        if !code.is_empty() {
-                            pieces.push(code.to_string());
-                        }
-                        break;
-                    }
-                }
-            }
+        if let Some(code) = extract_eval_arg(arg, &mut iter) {
+            pieces.push(code);
         }
     }
 
     (!pieces.is_empty()).then(|| pieces.join("\n"))
+}
+
+fn extract_eval_arg<'a>(arg: &'a str, iter: &mut std::slice::Iter<'a, String>) -> Option<String> {
+    if matches!(arg, "-e" | "--eval" | "-p" | "--print") {
+        return iter.next().cloned();
+    }
+
+    ["--eval=", "--print=", "-e", "-p"]
+        .iter()
+        .find_map(|prefix| arg.strip_prefix(prefix))
+        .filter(|code| !code.is_empty())
+        .map(str::to_string)
+}
+
+fn heredoc_start_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?m)(^|(?:&&|\|\||[;&|])\s*)(node|nodejs)\s+-\s+<<-?\s*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))[ \t]*\n"#,
+        )
+        .unwrap()
+    })
+}
+
+fn extract_node_heredoc_code(full_command: &str) -> Option<String> {
+    let captures = heredoc_start_regex().captures(full_command)?;
+    let delimiter = captures
+        .get(3)
+        .or_else(|| captures.get(4))
+        .or_else(|| captures.get(5))?
+        .as_str();
+    let body_start = captures.get(0)?.end();
+    let body_and_delimiter = &full_command[body_start..];
+    let heredoc_end =
+        Regex::new(&format!(r"(?m)^[ \t]*{}[ \t]*$", regex::escape(delimiter))).ok()?;
+    let delimiter_match = heredoc_end.find(body_and_delimiter)?;
+
+    Some(body_and_delimiter[..delimiter_match.start()].to_string())
+}
+
+fn can_read_stdin_heredoc(cmd: &Command) -> bool {
+    cmd.args.is_empty() || cmd.args.iter().any(|arg| arg == "-")
 }
 
 /// Minimal JS-literal scanner positioned just inside a spawn call's `(`.
@@ -295,6 +324,7 @@ fn ask(reason: &str) -> PermissionResult {
 /// Check whether a node command runs side-effecting inline code.
 pub fn check_node_script(
     cmd: &Command,
+    full_command: Option<&str>,
     config: &Config,
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
@@ -303,7 +333,9 @@ pub fn check_node_script(
     if cmd.name != "node" && cmd.name != "nodejs" {
         return None;
     }
-    let code = extract_node_code(cmd)?;
+    let code = extract_node_code(cmd).or_else(|| {
+        extract_node_heredoc_code(full_command?).filter(|_| can_read_stdin_heredoc(cmd))
+    })?;
 
     if OPAQUE_PATTERNS.iter().any(|p| code.contains(p)) {
         return Some(ask("Node script may have side effects"));
@@ -356,7 +388,7 @@ mod tests {
     }
 
     fn check(cmd: &Command, config: &Config) -> PermissionResult {
-        check_node_script(cmd, config, None, None, ExecContext::default()).unwrap()
+        check_node_script(cmd, None, config, None, None, ExecContext::default()).unwrap()
     }
 
     #[test]
@@ -408,6 +440,66 @@ mod tests {
     }
 
     #[test]
+    fn test_stdin_heredoc_fetch_asks() {
+        let cmd = make_cmd(&["-"]);
+        let full_command = "node - <<'NODE'\nfetch('http://example.com')\nNODE";
+
+        assert_eq!(
+            check_node_script(
+                &cmd,
+                Some(full_command),
+                &config_allowing(&[]),
+                None,
+                None,
+                ExecContext::default()
+            )
+            .unwrap()
+            .permission,
+            Permission::Ask
+        );
+    }
+
+    #[test]
+    fn test_stdin_heredoc_console_log_allowed() {
+        let cmd = make_cmd(&["-"]);
+        let full_command = "node - <<'NODE'\nconsole.log(1 + 1)\nNODE";
+
+        assert_eq!(
+            check_node_script(
+                &cmd,
+                Some(full_command),
+                &config_allowing(&[]),
+                None,
+                None,
+                ExecContext::default()
+            )
+            .unwrap()
+            .permission,
+            Permission::Allow
+        );
+    }
+
+    #[test]
+    fn test_stdin_heredoc_without_dash_arg_allowed() {
+        let cmd = make_cmd(&[]);
+        let full_command = "node - <<'NODE'\nconsole.log(1 + 1)\nNODE";
+
+        assert_eq!(
+            check_node_script(
+                &cmd,
+                Some(full_command),
+                &config_allowing(&[]),
+                None,
+                None,
+                ExecContext::default()
+            )
+            .unwrap()
+            .permission,
+            Permission::Allow
+        );
+    }
+
+    #[test]
     fn test_print_flag_extracted() {
         let cmd = make_cmd(&["-p", "require('fs').writeFileSync('/usr/x','y')"]);
         assert_eq!(
@@ -440,6 +532,23 @@ mod tests {
         assert!(
             check_node_script(
                 &cmd,
+                None,
+                &config_allowing(&[]),
+                None,
+                None,
+                ExecContext::default()
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_stdin_without_heredoc_returns_none() {
+        let cmd = make_cmd(&["-"]);
+        assert!(
+            check_node_script(
+                &cmd,
+                None,
                 &config_allowing(&[]),
                 None,
                 None,
@@ -458,6 +567,7 @@ mod tests {
         assert!(
             check_node_script(
                 &cmd,
+                None,
                 &config_allowing(&[]),
                 None,
                 None,
