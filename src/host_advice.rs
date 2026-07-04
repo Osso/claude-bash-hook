@@ -92,8 +92,8 @@ fn build_prompt(host: &str) -> String {
 }
 
 fn call_llm(host: &str) -> Option<HostDecision> {
-    use llm_sdk::Backend;
-    use llm_sdk::codex_cli::CodexCli;
+    use crate::llm_sdk::Backend;
+    use crate::llm_sdk::codex_cli::CodexCli;
 
     let backend = CodexCli::new()
         .ok()?

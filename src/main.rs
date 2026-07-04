@@ -13,6 +13,7 @@ mod docker;
 mod git;
 mod host_advice;
 mod kill;
+mod llm_sdk;
 mod magick;
 mod mysql_gc;
 mod nushell;

@@ -35,6 +35,9 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[path = "../llm_sdk.rs"]
+mod llm_sdk;
+
 const CODEX_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_MODEL: &str = "gpt-5.3-codex-spark";
 
@@ -356,8 +359,8 @@ async fn ask_codex_inproc(
     suggestions: Option<&[serde_json::Value]>,
     blocked_path: Option<&str>,
 ) -> Option<Advice> {
-    use llm_sdk::Backend;
-    use llm_sdk::codex_cli::CodexCli;
+    use crate::llm_sdk::Backend;
+    use crate::llm_sdk::codex_cli::CodexCli;
 
     let backend = CodexCli::new()
         .ok()?
@@ -1058,14 +1061,14 @@ fn parse_command_list(text: &str) -> Option<Vec<String>> {
 }
 
 async fn ask_codex_for_commands(target: &str, feedback: &str) -> Option<Vec<String>> {
-    use llm_sdk::Backend;
-    use llm_sdk::codex_cli::CodexCli;
+    use crate::llm_sdk::Backend;
+    use crate::llm_sdk::codex_cli::CodexCli;
 
     // Allow CLAUDE_APPROVAL_MOCK to short-circuit codex during tests.
-    if let Ok(mock) = std::env::var("CLAUDE_APPROVAL_MOCK") {
-        if let Some(rest) = mock.strip_prefix("mock-commands:") {
-            return parse_command_list(rest);
-        }
+    if let Ok(mock) = std::env::var("CLAUDE_APPROVAL_MOCK")
+        && let Some(rest) = mock.strip_prefix("mock-commands:")
+    {
+        return parse_command_list(rest);
     }
 
     let backend = CodexCli::new()

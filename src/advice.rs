@@ -21,7 +21,10 @@ enum Advice {
 /// (surfaces to the user), and `None` for unsure (real passthrough — let
 /// Claude Code's permission system decide).
 pub fn classify_passthrough(command: &str, cwd: Option<&str>) -> Option<PermissionResult> {
-    let rt = tokio::runtime::Runtime::new().ok()?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
     let advice = rt.block_on(ask_codex(command, cwd))?;
     match advice {
         Advice::Safe { reason } => Some(PermissionResult {
@@ -39,8 +42,8 @@ pub fn classify_passthrough(command: &str, cwd: Option<&str>) -> Option<Permissi
 }
 
 async fn ask_codex(command: &str, _cwd: Option<&str>) -> Option<Advice> {
-    use llm_sdk::Backend;
-    use llm_sdk::codex_cli::CodexCli;
+    use crate::llm_sdk::Backend;
+    use crate::llm_sdk::codex_cli::CodexCli;
 
     let backend = CodexCli::new()
         .ok()?
