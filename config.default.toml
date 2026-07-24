@@ -342,6 +342,7 @@ commands = [
     "doctl kubernetes cluster list", "doctl kubernetes cluster get", "doctl kubernetes cluster node-pool list",
     "doctl databases list", "doctl databases get",
     "doctl vpcs list", "doctl vpcs get",
+    "doctl registry repository list-tags",
 ]
 permission = "allow"
 reason = "doctl read-only"
