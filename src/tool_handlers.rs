@@ -1,7 +1,7 @@
 //! Handlers for non-bash tools (Write, Edit, regex-replace)
 
 use crate::config::{Config, ExecContext, Permission, PermissionResult};
-use crate::scripts::{node, python};
+use crate::scripts::{node, pyrun};
 use crate::{
     Harness, HookInput, apply_access_mode_result, bypass_mode, check_write_path, edits_allowed,
     output_decision, permission_name,
@@ -31,7 +31,7 @@ pub fn handle_non_bash_tool(
         return true;
     }
     if is_pyrun_tool(&hook_input.tool_name) {
-        emit_pyrun_eval_decision(hook_input, harness);
+        emit_pyrun_eval_decision(hook_input, config, is_subagent, harness);
         return true;
     }
     false
@@ -220,55 +220,74 @@ fn emit_hostrun_eval_decision(
     is_subagent: bool,
     harness: Harness,
 ) {
-    let Some(code) = hook_input.tool_input.code.as_deref() else {
-        output_decision(
-            "ask",
-            "hostrun_eval without code",
-            None,
-            harness,
-            hook_input.supports_updated_input,
-        );
-        return;
-    };
+    emit_eval_decision(
+        hook_input,
+        config,
+        is_subagent,
+        harness,
+        "hostrun_eval without code",
+        analyze_hostrun_code_with_context,
+    );
+}
+
+fn emit_pyrun_eval_decision(
+    hook_input: &HookInput,
+    config: &Config,
+    is_subagent: bool,
+    harness: Harness,
+) {
+    emit_eval_decision(
+        hook_input,
+        config,
+        is_subagent,
+        harness,
+        "pyrun_eval without code",
+        analyze_pyrun_code,
+    );
+}
+
+fn emit_eval_decision(
+    hook_input: &HookInput,
+    config: &Config,
+    is_subagent: bool,
+    harness: Harness,
+    missing_reason: &str,
+    analyze: fn(&str, &Config, Option<&str>, Option<&str>, ExecContext) -> PermissionResult,
+) {
     let ctx = ExecContext {
         edit_mode: edits_allowed(hook_input.effective_permission_mode()),
         is_subagent,
         bypass: bypass_mode(hook_input.effective_permission_mode()),
     };
-    let result = apply_access_mode_result(
-        analyze_hostrun_code_with_context(
+    let result = hook_input.tool_input.code.as_deref().map(|code| {
+        analyze(
             code,
             config,
             hook_input.tool_input.cwd.as_deref(),
             hook_input.cwd.as_deref(),
             ctx,
-        ),
-        hook_input.access_mode(),
-    );
-    output_decision(
-        permission_name(result.permission),
-        &result.reason,
-        None,
-        harness,
-        hook_input.supports_updated_input,
-    );
+        )
+    });
+    emit_code_decision(hook_input, harness, missing_reason, result);
 }
 
-fn emit_pyrun_eval_decision(hook_input: &HookInput, harness: Harness) {
-    let Some(code) = hook_input.tool_input.code.as_deref() else {
+fn emit_code_decision(
+    hook_input: &HookInput,
+    harness: Harness,
+    missing_reason: &str,
+    result: Option<PermissionResult>,
+) {
+    let Some(result) = result else {
         output_decision(
             "ask",
-            "pyrun_eval without code",
+            missing_reason,
             None,
             harness,
             hook_input.supports_updated_input,
         );
         return;
     };
-    let result = apply_access_mode_result(
-        analyze_pyrun_code(code, hook_input.cwd.as_deref()),
-        hook_input.access_mode(),
-    );
+    let result = apply_access_mode_result(result, hook_input.access_mode());
     output_decision(
         permission_name(result.permission),
         &result.reason,
@@ -283,8 +302,14 @@ fn analyze_hostrun_code(code: &str, config: &Config) -> PermissionResult {
     analyze_hostrun_code_with_context(code, config, None, None, ExecContext::default())
 }
 
-fn analyze_pyrun_code(code: &str, cwd: Option<&str>) -> PermissionResult {
-    python::check_python_code(code, cwd)
+fn analyze_pyrun_code(
+    code: &str,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+) -> PermissionResult {
+    pyrun::check_pyrun_code(code, config, virtual_cwd, initial_cwd, ctx)
 }
 
 fn analyze_hostrun_code_with_context(
@@ -298,246 +323,4 @@ fn analyze_hostrun_code_with_context(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ToolInput;
-
-    fn hook_input(tool_name: &str) -> HookInput {
-        HookInput {
-            tool_name: tool_name.to_string(),
-            ..Default::default()
-        }
-    }
-
-    fn config_with_main_thread_default(permission: &str) -> Config {
-        toml::from_str(&format!(r#"main_thread_default = "{}""#, permission)).expect("config")
-    }
-
-    fn handle_tool(hook_input: &HookInput, config: &Config, is_subagent: bool) -> bool {
-        handle_non_bash_tool(hook_input, config, is_subagent, Harness::Codex)
-    }
-
-    fn check_main_thread_block_for_test(
-        hook_input: &HookInput,
-        config: &Config,
-        is_subagent: bool,
-    ) -> bool {
-        check_main_thread_block(hook_input, config, is_subagent, Harness::Codex)
-    }
-
-    impl Default for HookInput {
-        fn default() -> Self {
-            HookInput {
-                tool_name: String::new(),
-                tool_input: ToolInput::default(),
-                permission_mode: None,
-                access_mode: None,
-                approval_policy: None,
-                cwd: None,
-                session_id: None,
-                hook_event_name: None,
-                hook_event: None,
-                supports_updated_input: false,
-            }
-        }
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_returns_false_for_other_tools() {
-        let handled = handle_tool(&hook_input("Bash"), &Config::default(), false);
-        assert!(!handled);
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_handles_regex_replace() {
-        let mut input = hook_input("mcp__regex-replace__regex_replace");
-        input.tool_input.dry_run = Some(true);
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_handles_codex_regex_replace_name() {
-        let mut input = hook_input("regex-replace.regex_replace");
-        input.tool_input.dry_run = Some(true);
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_handles_claude_hostrun_eval() {
-        let mut input = hook_input("mcp__hostrun__hostrun_eval");
-        input.tool_input.code = Some("run.sleep('30'); tools.tmux.capture('vitest');".to_string());
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    #[test]
-    fn test_hostrun_eval_read_only_code_is_allowed() {
-        let result = analyze_hostrun_code(
-            "run.sleep('30'); tools.tmux.capture('vitest');",
-            &Config::default(),
-        );
-        assert_eq!(result.permission, Permission::Allow);
-    }
-
-    #[test]
-    fn test_hostrun_eval_file_write_asks() {
-        let result = analyze_hostrun_code("fs.writeFile('/tmp/x', 'y');", &Config::default());
-        assert_eq!(result.permission, Permission::Ask);
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_handles_claude_pyrun_eval() {
-        let mut input = hook_input("mcp__pyrun__pyrun_eval");
-        input.tool_input.code = Some("print(1 + 1)".to_string());
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    #[test]
-    fn test_pyrun_eval_read_only_code_is_allowed() {
-        let result = analyze_pyrun_code("print(1 + 1)", None);
-        assert_eq!(result.permission, Permission::Allow);
-    }
-
-    #[test]
-    fn test_pyrun_eval_subprocess_asks() {
-        let result = analyze_pyrun_code(
-            "import subprocess; subprocess.run(['rm', '-rf', '/tmp/x'])",
-            None,
-        );
-        assert_eq!(result.permission, Permission::Ask);
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_handles_write_edit() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    #[test]
-    fn test_check_main_thread_block_denies_when_disabled() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
-        let config = config_with_main_thread_default("deny");
-        assert!(check_main_thread_block_for_test(&input, &config, false));
-    }
-
-    #[test]
-    fn test_check_main_thread_block_allows_whitelisted_path() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/tmp/allowed/file.txt".to_string());
-        let config: Config = toml::from_str(
-            r#"
-            main_thread_default = "deny"
-            main_thread_write_allow = ["/tmp/allowed/*"]
-        "#,
-        )
-        .expect("config");
-        assert!(!check_main_thread_block_for_test(&input, &config, false));
-    }
-
-    #[test]
-    fn test_check_main_thread_block_skips_for_subagent() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
-        let config = config_with_main_thread_default("deny");
-        assert!(!check_main_thread_block_for_test(&input, &config, true));
-    }
-
-    #[test]
-    fn test_check_main_thread_block_skips_when_default_not_restrictive() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/tmp/test.txt".to_string());
-        let config = config_with_main_thread_default("allow");
-        assert!(!check_main_thread_block_for_test(&input, &config, false));
-    }
-
-    #[test]
-    fn test_regex_replace_reason_variants() {
-        assert_eq!(
-            regex_replace_reason(false, true, false),
-            "regex replace (dry run)"
-        );
-        assert_eq!(
-            regex_replace_reason(false, false, true),
-            "regex replace (subagent)"
-        );
-        assert_eq!(
-            regex_replace_reason(true, false, false),
-            "regex replace (edit mode)"
-        );
-        assert_eq!(
-            regex_replace_reason(false, false, false),
-            "regex replace modifies files (not in edit mode)"
-        );
-    }
-
-    #[test]
-    fn test_handle_regex_replace_ask_path() {
-        let input = hook_input("mcp__regex-replace__regex_replace");
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    fn ask_paths_config(pattern: &str) -> Config {
-        toml::from_str(&format!(r#"ask_paths = ["{}"]"#, pattern)).expect("config")
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_handles_read() {
-        let mut input = hook_input("Read");
-        input.tool_input.file_path = Some("/home/user/.config/kitty.conf".to_string());
-        let config = ask_paths_config("/home/user/.config/*");
-        assert!(handle_tool(&input, &config, false));
-    }
-
-    #[test]
-    fn test_handle_non_bash_tool_read_no_match_still_handled() {
-        let mut input = hook_input("Read");
-        input.tool_input.file_path = Some("/tmp/file.txt".to_string());
-        assert!(handle_tool(&input, &Config::default(), false));
-    }
-
-    #[test]
-    fn test_read_allow_paths_match() {
-        let mut input = hook_input("Read");
-        input.tool_input.file_path = Some("/home/user/Repos/foo.rs".to_string());
-        let config: Config =
-            toml::from_str(r#"read_allow_paths = ["/home/user/Repos/*"]"#).expect("config");
-        assert!(handle_tool(&input, &config, false));
-    }
-
-    #[test]
-    fn test_ask_paths_beats_read_allow_paths() {
-        let mut input = hook_input("Read");
-        input.tool_input.file_path = Some("/home/user/.config/secret".to_string());
-        let config: Config = toml::from_str(
-            r#"
-            ask_paths = ["/home/user/.config/*"]
-            read_allow_paths = ["/home/user/*"]
-        "#,
-        )
-        .expect("config");
-        assert!(handle_tool(&input, &config, false));
-    }
-
-    #[test]
-    fn test_write_allow_paths_match() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/tmp/mcp_probe.py".to_string());
-        let config: Config = toml::from_str(r#"write_allow_paths = ["/tmp/*"]"#).expect("config");
-        assert!(handle_tool(&input, &config, false));
-    }
-
-    #[test]
-    fn test_ask_paths_beats_write_allow_paths() {
-        let mut input = hook_input("Write");
-        input.tool_input.file_path = Some("/home/user/.config/secret".to_string());
-        let config: Config = toml::from_str(
-            r#"
-            ask_paths = ["/home/user/.config/*"]
-            write_allow_paths = ["/home/user/*"]
-        "#,
-        )
-        .expect("config");
-        assert!(handle_tool(&input, &config, false));
-    }
-}
+mod tests;

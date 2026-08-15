@@ -12,6 +12,8 @@ PreToolUse hook for Claude Code that provides granular permission control over B
   - Config-driven: sudo, authsudo, nice, nohup, time, strace, ltrace, nu, fish
   - Special handling: ssh, scp, rsync, env, kubectl exec, docker exec/compose, timeout, xargs, sh/bash/zsh, kitty-remote, wezterm-remote
 - **scripts/** - Script content analysis (parses inline code to allow safe read-only scripts):
+  - pyrun.rs - Complete `pyrun_eval` programs; single whole-tool AST permission analysis (see [spec](docs/specs/pyrun-permissions.md))
+  - pyrun/path.rs - Filesystem and command-output path policy used by Pyrun analysis
   - python.rs - Python via `-c` or heredoc (allows file I/O, denies subprocess/os.system/eval)
   - shell.rs - Shell scripts via `sh -c` / `bash -c` (re-parses inner commands through the same rule engine)
   - php.rs - PHP via `-r` flag (allows read-only operations, denies exec/system/passthru)
@@ -21,7 +23,7 @@ PreToolUse hook for Claude Code that provides granular permission control over B
   - ruby.rs - Ruby via `-e` flag (allows read-only ops, asks on File writes/system/backticks/network/eval)
   - awk.rs - AWK/gawk/mawk programs (allows text processing, asks on in-script `> file`/`| cmd`/`getline`/`system()`)
   - sed.rs - real sed parser (addresses, s///y/// with arbitrary delimiters + bracket exprs); asks on `w`/`s///w` writes to protected paths and `e`/`s///e` exec. `sed -i` denied upstream
-- **tool_handlers.rs** - Non-bash tool handling (Write, Edit, regex-replace) with main thread blocking
+- **tool_handlers.rs** - Non-bash tool handling (Write, Edit, regex-replace, Hostrun, and Pyrun) with main thread blocking
 - **sql.rs** - MySQL/MariaDB/SQLite query analysis (allow SELECT, ask for writes)
 - **redis.rs** - Redis command analysis (allow read-only commands like GET/LLEN, ask for writes)
 - **git.rs** - Git-specific rules (push branch protection, checkout handling)

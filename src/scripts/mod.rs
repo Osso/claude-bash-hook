@@ -7,6 +7,7 @@ pub mod lua;
 pub mod node;
 pub mod perl;
 pub mod php;
+pub mod pyrun;
 pub mod python;
 pub mod ruby;
 pub mod sed;

@@ -242,6 +242,34 @@ fn extract_piped_query(prev_cmd: Option<&analyzer::Command>) -> Option<String> {
     Some(prev.args.join(" "))
 }
 
+/// Analyze one literal command argv without parsing shell source.
+pub(crate) fn analyze_literal_command(
+    program: &str,
+    args: &[String],
+    config: &Config,
+    ctx: ExecContext,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+) -> PermissionResult {
+    let command = analyzer::Command {
+        name: program.to_string(),
+        args: args.to_vec(),
+    };
+    let result = check_single_command(
+        &command,
+        config,
+        ctx,
+        virtual_cwd,
+        initial_cwd,
+        false,
+        None,
+        None,
+        false,
+        0,
+    );
+    allow_in_bypass(result, ctx)
+}
+
 /// Check a single command, handling wrappers recursively
 fn check_single_command(
     cmd: &analyzer::Command,
@@ -521,7 +549,7 @@ fn check_scripting(
 }
 
 /// In bypass mode, downgrade any ask/deny verdict to allow.
-fn allow_in_bypass(mut result: PermissionResult, ctx: ExecContext) -> PermissionResult {
+pub(crate) fn allow_in_bypass(mut result: PermissionResult, ctx: ExecContext) -> PermissionResult {
     if ctx.bypass && result.permission != Permission::Allow {
         result.permission = Permission::Allow;
         result.reason = format!("bypassPermissions: {}", result.reason);

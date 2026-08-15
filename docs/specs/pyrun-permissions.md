@@ -1,0 +1,91 @@
+# Pyrun permissions
+
+Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_eval` program before Pyrun evaluates it. The contract is exercised by tests in [`src/tool_handlers/tests.rs`](../../src/tool_handlers/tests.rs); implementation references are [`src/scripts/pyrun.rs`](../../src/scripts/pyrun.rs) and [`src/scripts/pyrun/path.rs`](../../src/scripts/pyrun/path.rs).
+
+## What it must do
+
+### Approval boundary
+
+- [ ] Make one whole-tool permission decision for each `pyrun_eval` call before evaluation; do not invoke the hook binary or request nested approvals for individual AST calls.
+- [x] Deny syntactically invalid Python/Pyrun code before helper analysis.
+- [x] Aggregate findings from the complete program instead of approving only the first helper call.
+
+### Commands and context
+
+- [x] Analyze literal `run.*` and `cli.*` commands with the existing literal-command policy, including configured command permissions and main-thread restrictions.
+- [x] Require literal command names and arguments; dynamic command names, arguments, attributes, builder `cwd`/`in_` values, and unsupported literals ask.
+- [x] Resolve relative command working directories from the Pyrun session context and reanalyze the command under a literal builder cwd.
+- [x] Preserve the distinction between the tool-provided virtual cwd and the hook's initial cwd when resolving command and path policy.
+- [x] Apply aggregation ordering `deny > ask > allow` with a behavioral test covering a deny and ask in the same program.
+
+### Filesystem and output paths
+
+- [x] Allow safe literal filesystem reads unless the resolved path is protected by `ask_paths`.
+- [x] Treat filesystem writes and removals as modifying operations subject to existing path and command policy.
+- [x] Allow writes and command output under `/tmp` and the resolved project/session cwd when no stricter policy denies them.
+- [x] Honor configured write-allow paths for writes and output, `ask_paths` for reads and all modifying operations, and `ask_write_paths` for modifying operations.
+- [x] Analyze `cli.*.output(...)` as a write to the session cwd; a builder cwd does not change output-path resolution.
+- [x] Ask when paths are dynamic, contain parent-directory traversal, use unsupported tilde expansion, cannot be safely resolved, or traverse broken/out-of-tree symlinks.
+- [x] Reuse the existing `touch` policy for filesystem writes and command output, and the existing `rm` policy for filesystem removal.
+
+### Helpers and fail-closed behavior
+
+- [x] Allow only the tested read-only helper surface for `rg`, `fd`, `text`, `seq`, `obj`, and `hr`.
+- [x] Ask for network, privileged, bridge, command-adjacent, or otherwise side-effecting helper roots such as `http`, `tools`, `kubectl`, `sqlite`, `pi`, and `tmp`.
+- [x] Ask for dynamic access, reserved-helper rebinding or aliasing, unknown helper methods, and unsupported helper literals.
+- [x] Ask for every statically unknown Pyrun command and filesystem method with dedicated behavioral coverage.
+
+## How it works
+
+- [`src/scripts/pyrun.rs`](../../src/scripts/pyrun.rs) owns the Pyrun-specific AST permission contract.
+- [`src/scripts/pyrun/path.rs`](../../src/scripts/pyrun/path.rs) owns filesystem and command-output path policy.
+- [`src/analysis.rs`](../../src/analysis.rs) owns literal command and shared permission-policy reuse.
+- [`src/tool_handlers.rs`](../../src/tool_handlers.rs) connects `pyrun_eval` to the single PreToolUse decision.
+
+## Implementation inventory
+
+- `src/scripts/pyrun.rs` — parses one complete Pyrun program, classifies helper calls, and aggregates permission findings.
+- `src/scripts/pyrun/path.rs` — applies filesystem and command-output path policy.
+- `src/tool_handlers.rs` — recognizes Pyrun tool names, supplies cwd/context, and emits the hook decision.
+- `src/analysis.rs` — analyzes literal commands, command output targets, and permission-mode effects reused by Pyrun.
+- `src/config/mod.rs` — provides command rules and protected/read/write path matching.
+- `src/scripts/mod.rs` — registers the Pyrun analyzer module.
+- `Cargo.toml` / `Cargo.lock` — provide the Python tree-sitter parser dependency.
+
+## Tests asserting this spec
+
+- `src/tool_handlers/tests.rs::test_pyrun_eval_syntax_error_denies`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_run_git_diff_allows`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_run_rm_etc_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_literal_run_command_allows`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_dynamic_command_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_unknown_command_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_cli_relative_cwd_resolves_from_session_cwd`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_cli_literal_cwd_reanalyzes_relative_command`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_host_cd_invalidates_relative_path_context`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_safe_fs_read_allows`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_protected_fs_read_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_tmp_write_allows`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_protected_write_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_protected_remove_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_unknown_filesystem_method_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_cli_output_protected_path_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_http_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_tools_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_pi_bridge_asks`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_selects_most_restrictive_call`
+- `src/tool_handlers/tests.rs::test_pyrun_eval_deny_wins_over_ask`
+- Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests.rs` cover dynamic access, aliases, unsupported literals, path normalization, symlinks, and pure-helper allowlists.
+
+## Known gaps (current cycle)
+
+- [ ] Add an integration test asserting the emitted PreToolUse result for a `pyrun_eval` call, proving the whole program receives one hook decision.
+- [ ] Add a project-level wiki page if implementation details need documentation beyond this contract.
+
+## Out of scope
+
+- Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
+- Full semantic proof of arbitrary Python behavior.
+- Auto-allowing dynamic, escaped, or f-string command and path literals; these remain ask cases.
+- Simulating `host.cd` as execution flow; `host.cd` asks instead.
+- Changes to Pyrun, Pi, command configuration format, or unrelated hook analyzers.

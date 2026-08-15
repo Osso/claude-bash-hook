@@ -118,6 +118,10 @@ kubectl get pods    # matches "kubectl get" -> allow
 kubectl delete pod  # matches "kubectl delete" -> ask
 ```
 
+### Pyrun evaluation
+
+The hook recognizes `pyrun_eval` and analyzes the complete program once before evaluation. Pyrun-specific AST permission logic lives in [`src/scripts/pyrun.rs`](src/scripts/pyrun.rs), with filesystem and command-output path policy in [`src/scripts/pyrun/path.rs`](src/scripts/pyrun/path.rs); see the [Pyrun permission spec](docs/specs/pyrun-permissions.md) for supported command, helper, and path behavior.
+
 ### Suggestions
 
 Suggest better alternatives:
