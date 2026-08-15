@@ -321,6 +321,32 @@ fn ask(reason: &str) -> PermissionResult {
     }
 }
 
+pub fn check_javascript_code(
+    code: &str,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+) -> PermissionResult {
+    if OPAQUE_PATTERNS.iter().any(|p| code.contains(p)) {
+        return ask("JavaScript may have side effects");
+    }
+
+    match scan_exec_calls(code) {
+        ExecScan::None => allow("read-only JavaScript"),
+        ExecScan::Unparseable => ask("JavaScript spawns an unrecognized command"),
+        ExecScan::Calls(calls) => {
+            if calls.iter().all(|(bin, args)| {
+                command_allowed(config, bin, args, virtual_cwd, initial_cwd, ctx)
+            }) {
+                allow("JavaScript only spawns allowed commands")
+            } else {
+                ask("JavaScript spawns a command requiring approval")
+            }
+        }
+    }
+}
+
 /// Check whether a node command runs side-effecting inline code.
 pub fn check_node_script(
     cmd: &Command,
@@ -337,23 +363,13 @@ pub fn check_node_script(
         extract_node_heredoc_code(full_command?).filter(|_| can_read_stdin_heredoc(cmd))
     })?;
 
-    if OPAQUE_PATTERNS.iter().any(|p| code.contains(p)) {
-        return Some(ask("Node script may have side effects"));
+    let mut result = check_javascript_code(&code, config, virtual_cwd, initial_cwd, ctx);
+    if result.reason.starts_with("JavaScript") {
+        result.reason = result.reason.replacen("JavaScript", "Node script", 1);
+    } else if result.reason == "read-only JavaScript" {
+        result.reason = "read-only Node script".to_string();
     }
-
-    Some(match scan_exec_calls(&code) {
-        ExecScan::None => allow("read-only Node script"),
-        ExecScan::Unparseable => ask("Node script spawns an unrecognized command"),
-        ExecScan::Calls(calls) => {
-            if calls.iter().all(|(bin, args)| {
-                command_allowed(config, bin, args, virtual_cwd, initial_cwd, ctx)
-            }) {
-                allow("Node script only spawns allowed commands")
-            } else {
-                ask("Node script spawns a command requiring approval")
-            }
-        }
-    })
+    Some(result)
 }
 
 #[cfg(test)]

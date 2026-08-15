@@ -392,6 +392,32 @@ fn all_writes_allowed(paths: &[String], cwd: Option<&str>) -> bool {
     true
 }
 
+pub fn check_python_code(code: &str, cwd: Option<&str>) -> PermissionResult {
+    if is_readonly_python(code) {
+        return PermissionResult {
+            permission: Permission::Allow,
+            reason: "read-only Python script".to_string(),
+            suggestion: None,
+        };
+    }
+
+    // Check if writes are only to allowed paths (project dir or /tmp)
+    let write_paths = extract_write_paths(code);
+    if !write_paths.is_empty() && all_writes_allowed(&write_paths, cwd) {
+        return PermissionResult {
+            permission: Permission::Allow,
+            reason: "Python script writes to project dir or /tmp".to_string(),
+            suggestion: None,
+        };
+    }
+
+    PermissionResult {
+        permission: Permission::Ask,
+        reason: "Python script may have side effects".to_string(),
+        suggestion: None,
+    }
+}
+
 /// Check if a python command is read-only or writes only to allowed paths
 pub fn check_python_script(
     cmd: &Command,
@@ -413,29 +439,7 @@ pub fn check_python_script(
         return None;
     };
 
-    if is_readonly_python(&code) {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "read-only Python script".to_string(),
-            suggestion: None,
-        });
-    }
-
-    // Check if writes are only to allowed paths (project dir or /tmp)
-    let write_paths = extract_write_paths(&code);
-    if !write_paths.is_empty() && all_writes_allowed(&write_paths, cwd) {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "Python script writes to project dir or /tmp".to_string(),
-            suggestion: None,
-        });
-    }
-
-    Some(PermissionResult {
-        permission: Permission::Ask,
-        reason: "Python script may have side effects".to_string(),
-        suggestion: None,
-    })
+    Some(check_python_code(&code, cwd))
 }
 
 #[cfg(test)]

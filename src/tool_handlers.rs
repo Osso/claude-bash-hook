@@ -1,9 +1,10 @@
 //! Handlers for non-bash tools (Write, Edit, regex-replace)
 
-use crate::config::{Config, Permission, PermissionResult};
+use crate::config::{Config, ExecContext, Permission, PermissionResult};
+use crate::scripts::{node, python};
 use crate::{
-    Harness, HookInput, apply_access_mode_result, check_write_path, edits_allowed, output_decision,
-    permission_name,
+    Harness, HookInput, apply_access_mode_result, bypass_mode, check_write_path, edits_allowed,
+    output_decision, permission_name,
 };
 
 /// Handle Write, Edit, Read, and regex-replace tools.
@@ -25,6 +26,14 @@ pub fn handle_non_bash_tool(
         handle_regex_replace(hook_input, is_subagent, harness);
         return true;
     }
+    if is_hostrun_tool(&hook_input.tool_name) {
+        emit_hostrun_eval_decision(hook_input, config, is_subagent, harness);
+        return true;
+    }
+    if is_pyrun_tool(&hook_input.tool_name) {
+        emit_pyrun_eval_decision(hook_input, harness);
+        return true;
+    }
     false
 }
 
@@ -35,6 +44,20 @@ fn is_regex_replace_tool(tool_name: &str) -> bool {
             | "mcp__regex_replace__regex_replace"
             | "regex-replace.regex_replace"
             | "regex_replace.regex_replace"
+    )
+}
+
+fn is_hostrun_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "mcp__hostrun__hostrun_eval" | "hostrun.hostrun_eval" | "hostrun_eval"
+    )
+}
+
+fn is_pyrun_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "mcp__pyrun__pyrun_eval" | "pyrun.pyrun_eval" | "pyrun_eval"
     )
 }
 
@@ -191,6 +214,89 @@ fn regex_replace_reason(edit_mode: bool, is_dry_run: bool, is_subagent: bool) ->
     }
 }
 
+fn emit_hostrun_eval_decision(
+    hook_input: &HookInput,
+    config: &Config,
+    is_subagent: bool,
+    harness: Harness,
+) {
+    let Some(code) = hook_input.tool_input.code.as_deref() else {
+        output_decision(
+            "ask",
+            "hostrun_eval without code",
+            None,
+            harness,
+            hook_input.supports_updated_input,
+        );
+        return;
+    };
+    let ctx = ExecContext {
+        edit_mode: edits_allowed(hook_input.effective_permission_mode()),
+        is_subagent,
+        bypass: bypass_mode(hook_input.effective_permission_mode()),
+    };
+    let result = apply_access_mode_result(
+        analyze_hostrun_code_with_context(
+            code,
+            config,
+            hook_input.tool_input.cwd.as_deref(),
+            hook_input.cwd.as_deref(),
+            ctx,
+        ),
+        hook_input.access_mode(),
+    );
+    output_decision(
+        permission_name(result.permission),
+        &result.reason,
+        None,
+        harness,
+        hook_input.supports_updated_input,
+    );
+}
+
+fn emit_pyrun_eval_decision(hook_input: &HookInput, harness: Harness) {
+    let Some(code) = hook_input.tool_input.code.as_deref() else {
+        output_decision(
+            "ask",
+            "pyrun_eval without code",
+            None,
+            harness,
+            hook_input.supports_updated_input,
+        );
+        return;
+    };
+    let result = apply_access_mode_result(
+        analyze_pyrun_code(code, hook_input.cwd.as_deref()),
+        hook_input.access_mode(),
+    );
+    output_decision(
+        permission_name(result.permission),
+        &result.reason,
+        None,
+        harness,
+        hook_input.supports_updated_input,
+    );
+}
+
+#[cfg(test)]
+fn analyze_hostrun_code(code: &str, config: &Config) -> PermissionResult {
+    analyze_hostrun_code_with_context(code, config, None, None, ExecContext::default())
+}
+
+fn analyze_pyrun_code(code: &str, cwd: Option<&str>) -> PermissionResult {
+    python::check_python_code(code, cwd)
+}
+
+fn analyze_hostrun_code_with_context(
+    code: &str,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+) -> PermissionResult {
+    node::check_javascript_code(code, config, virtual_cwd, initial_cwd, ctx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +360,50 @@ mod tests {
         let mut input = hook_input("regex-replace.regex_replace");
         input.tool_input.dry_run = Some(true);
         assert!(handle_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_handles_claude_hostrun_eval() {
+        let mut input = hook_input("mcp__hostrun__hostrun_eval");
+        input.tool_input.code = Some("run.sleep('30'); tools.tmux.capture('vitest');".to_string());
+        assert!(handle_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_hostrun_eval_read_only_code_is_allowed() {
+        let result = analyze_hostrun_code(
+            "run.sleep('30'); tools.tmux.capture('vitest');",
+            &Config::default(),
+        );
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_hostrun_eval_file_write_asks() {
+        let result = analyze_hostrun_code("fs.writeFile('/tmp/x', 'y');", &Config::default());
+        assert_eq!(result.permission, Permission::Ask);
+    }
+
+    #[test]
+    fn test_handle_non_bash_tool_handles_claude_pyrun_eval() {
+        let mut input = hook_input("mcp__pyrun__pyrun_eval");
+        input.tool_input.code = Some("print(1 + 1)".to_string());
+        assert!(handle_tool(&input, &Config::default(), false));
+    }
+
+    #[test]
+    fn test_pyrun_eval_read_only_code_is_allowed() {
+        let result = analyze_pyrun_code("print(1 + 1)", None);
+        assert_eq!(result.permission, Permission::Allow);
+    }
+
+    #[test]
+    fn test_pyrun_eval_subprocess_asks() {
+        let result = analyze_pyrun_code(
+            "import subprocess; subprocess.run(['rm', '-rf', '/tmp/x'])",
+            None,
+        );
+        assert_eq!(result.permission, Permission::Ask);
     }
 
     #[test]

@@ -83,6 +83,8 @@ struct ToolInput {
     file_path: Option<String>,
     // For regex-replace MCP tool
     dry_run: Option<bool>,
+    // For Hostrun MCP tool
+    code: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -161,7 +163,7 @@ fn edits_allowed(mode: Option<&str>) -> bool {
 }
 
 /// Check if the session is in bypassPermissions ("yolo") mode
-fn bypass_mode(mode: Option<&str>) -> bool {
+pub(crate) fn bypass_mode(mode: Option<&str>) -> bool {
     mode == Some("bypassPermissions")
 }
 
