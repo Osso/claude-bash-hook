@@ -604,6 +604,55 @@ fn test_pyrun_eval_reported_literal_loop_command_splat_allows() {
 }
 
 #[test]
+fn test_pyrun_eval_reported_string_escape_jsonpath_allows() {
+    let code = r#"r=cli.kubectl('get','kustomization','infra-ops','-n','flux-system','-o','jsonpath={.status.lastAppliedRevision}{"\\n"}{range .status.conditions[*]}{.type}{"="}{.status}{":"}{.reason}{"\\n"}{end}').capture().run(); print(r.stdout); print(r.stderr); print('rc',r.returncode)"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_supported_string_escapes_preserve_policy() {
+    let continuation = "\\\n";
+    let safe_get = format!("cli.kubectl('g{continuation}et', 'pods').run()");
+    let safe_result = pyrun_result(&safe_get, &Config::default());
+    assert_eq!(
+        safe_result.permission,
+        Permission::Allow,
+        "{}",
+        safe_result.reason
+    );
+
+    for code in [
+        format!("cli.kubectl('de{continuation}lete', 'pod', 'target').run()"),
+        format!("cli.command('r{continuation}m', '-rf', '/etc').run()"),
+        format!("fs.write('/et{continuation}c/passwd', 'x')"),
+    ] {
+        let result = pyrun_result(&code, &Config::default());
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_unsupported_string_escape_forms_fail_closed() {
+    for code in [
+        r#"cli.kubectl(r'get', 'pods').run()"#,
+        r#"cli.kubectl(b'get', 'pods').run()"#,
+        r#"cli.kubectl(f'get', 'pods').run()"#,
+        r#"cli.kubectl(f'{verb}', 'pods').run()"#,
+        r#"cli.kubectl('''get''', 'pods').run()"#,
+        r#"cli.kubectl('g' 'et', 'pods').run()"#,
+        r#"cli.kubectl('g' + 'et', 'pods').run()"#,
+        r#"cli.kubectl('\x67et', 'pods').run()"#,
+        r#"cli.kubectl('\q', 'pods').run()"#,
+    ] {
+        let result = pyrun_result(code, &Config::default());
+        assert_ne!(result.permission, Permission::Allow, "{code}");
+    }
+}
+
+#[test]
 fn test_pyrun_eval_reported_static_loop_collection_allows() {
     let code = r#"import json
 cmds=[

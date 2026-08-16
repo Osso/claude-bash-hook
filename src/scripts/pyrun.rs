@@ -1088,17 +1088,60 @@ fn literal_string(node: Node<'_>, source: &[u8]) -> Option<String> {
         return None;
     }
     let text = node.utf8_text(source).ok()?.trim();
+    decode_python_string_body(plain_python_string_body(text)?)
+}
+
+fn plain_python_string_body(text: &str) -> Option<&str> {
     let bytes = text.as_bytes();
-    if bytes.len() < 2
-        || !matches!(
-            (bytes[0], bytes[bytes.len() - 1]),
-            (b'\'', b'\'') | (b'"', b'"')
-        )
-    {
+    let quote = *bytes.first()?;
+    if bytes.len() < 2 || !matches!(quote, b'\'' | b'"') {
         return None;
     }
-    let value = &text[1..text.len() - 1];
-    (!value.contains('\\')).then(|| value.to_string())
+    if bytes.last().copied() != Some(quote) {
+        return None;
+    }
+    if bytes.get(1) == Some(&quote) && bytes.get(2) == Some(&quote) {
+        return None;
+    }
+    Some(&text[1..text.len() - 1])
+}
+
+fn decode_python_string_body(raw: &str) -> Option<String> {
+    if !raw.contains('\\') {
+        return Some(raw.to_string());
+    }
+    let mut output = String::with_capacity(raw.len());
+    let mut characters = raw.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\\' {
+            decode_python_escape(&mut characters, &mut output)?;
+        } else {
+            output.push(character);
+        }
+    }
+    Some(output)
+}
+
+fn decode_python_escape(
+    characters: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    output: &mut String,
+) -> Option<()> {
+    match characters.next()? {
+        '\\' => output.push('\\'),
+        '\'' => output.push('\''),
+        '"' => output.push('"'),
+        'a' => output.push('\u{0007}'),
+        'b' => output.push('\u{0008}'),
+        'f' => output.push('\u{000c}'),
+        'n' => output.push('\n'),
+        'r' => output.push('\r'),
+        't' => output.push('\t'),
+        'v' => output.push('\u{000b}'),
+        '\n' => {}
+        '\r' if characters.next() == Some('\n') => {}
+        _ => return None,
+    }
+    Some(())
 }
 
 fn dotted_path(node: Node<'_>, source: &[u8]) -> Option<Vec<String>> {
