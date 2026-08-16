@@ -521,7 +521,7 @@ fn analyze_command_call(
     let (program, arg_nodes) = if method == "command" || method == "cmd" {
         let Some(program) = arguments
             .first()
-            .and_then(|arg| literal_string(*arg, source))
+            .and_then(|argument| resolve_command_program(*argument, source, state))
         else {
             return ask("Pyrun command name is dynamic".to_string());
         };
@@ -849,6 +849,17 @@ fn resolve_known_argument_splat(
     let value = splat.named_children(&mut cursor).next()?;
     let name = identifier_name(value, source)?;
     state.known_argument_lists.get(&name).cloned()
+}
+
+fn resolve_command_program(
+    argument: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<String> {
+    match resolve_known_argument(argument, source, state)? {
+        KnownArgument::Literal(program) => Some(program),
+        KnownArgument::KubernetesResourceName => None,
+    }
 }
 
 fn resolve_known_argument(

@@ -540,6 +540,56 @@ fn test_pyrun_eval_unknown_loop_command_splat_asks() {
 }
 
 #[test]
+fn test_pyrun_eval_reported_static_command_name_with_loop_splat_allows() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["groundcover-cli logs", "groundcover-cli events", "groundcover-cli issues"]
+        permission = "allow"
+        "#,
+    )
+    .expect("config");
+    let code = r#"cmd='/home/osso/.cargo/bin/groundcover-cli'
+for args in [
+ ('logs','-s','30m','--namespace','ops','-w','mariadb-mysql-cdc-resync-stream-20260813','-n','200'),
+ ('events','-s','30m','--namespace','ops','-n','100'),
+ ('issues','-s','30m','-w','mariadb-mysql-cdc-resync-stream-20260813','-n','100')]:
+ r=cli.command(cmd,*args).capture().run(); print('\n===',' '.join(args),'exit',r.exit_code,'===\n',r.stdout[-30000:],r.stderr[-2000:])"#;
+
+    let result = pyrun_result(code, &config);
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_reassigned_static_command_name_asks() {
+    let code = "cmd = 'git'\ncmd = choose_command()\ncli.command(cmd, 'diff').run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_static_command_name_alias_asks() {
+    let code = "cmd = 'git'\nalias = cmd\ncli.command(alias, 'diff').run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_static_command_name_preserves_command_policy() {
+    let code = "cmd = 'rm'\ncli.command(cmd, '-rf', '/etc').run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
 fn test_pyrun_eval_computed_literal_loop_member_asks() {
     let code = "for args in [('get', resource)]:\n    cli.kubectl(*args).run()";
 
