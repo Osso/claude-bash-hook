@@ -23,6 +23,8 @@ const RESERVED_ROOTS: &[&str] = &[
 const BUILDER_CWD_METHODS: &[&str] = &["cwd", "in_"];
 const KUBERNETES_NAME_JSONPATH: &str = "jsonpath={.items[0].metadata.name}";
 const KUBERNETES_RESOURCE_PLACEHOLDER: &str = "pyrun-kubernetes-resource";
+const MAX_STATIC_LOOP_ITERATIONS: usize = 32;
+const MAX_STATIC_ARGV_ITEMS: usize = 64;
 const BUILDER_METHODS: &[&str] = &[
     "capture",
     "cwd",
@@ -94,6 +96,7 @@ struct VisitContext<'a> {
 struct ScopeState {
     obj_shadowed: bool,
     known_arguments: HashMap<String, KnownArgument>,
+    known_argument_lists: HashMap<String, Vec<KnownArgument>>,
 }
 
 fn visit_scope(node: Node<'_>, context: VisitContext<'_>, findings: &mut Vec<PermissionResult>) {
@@ -126,6 +129,9 @@ fn visit_control_node(
         visit_scope(node, context, findings);
         return true;
     }
+    if visit_static_argument_loop(node, context, state, findings) {
+        return true;
+    }
     if is_uncertain_control_flow(node) {
         visit_uncertain_control_flow(node, context, state, findings);
         return true;
@@ -148,8 +154,84 @@ fn visit_uncertain_control_flow(
         let mut branch_state = state.clone();
         visit_nodes(child, context, &mut branch_state, findings);
     }
+    clear_known_state(state);
+}
+
+fn visit_static_argument_loop(
+    node: Node<'_>,
+    context: VisitContext<'_>,
+    state: &mut ScopeState,
+    findings: &mut Vec<PermissionResult>,
+) -> bool {
+    let Some((name, argument_lists, body)) = static_argument_loop(node, context.source) else {
+        return false;
+    };
+    for arguments in argument_lists {
+        let mut iteration_state = state.clone();
+        iteration_state
+            .known_argument_lists
+            .insert(name.clone(), arguments);
+        visit_nodes(body, context, &mut iteration_state, findings);
+    }
+    clear_known_state(state);
+    true
+}
+
+fn static_argument_loop<'a>(
+    node: Node<'a>,
+    source: &[u8],
+) -> Option<(String, Vec<Vec<KnownArgument>>, Node<'a>)> {
+    if node.kind() != "for_statement" || node.child_by_field_name("alternative").is_some() {
+        return None;
+    }
+    let name = identifier_name(node.child_by_field_name("left")?, source)?;
+    if RESERVED_ROOTS.contains(&name.as_str()) {
+        return None;
+    }
+    let argument_lists = literal_argument_lists(node.child_by_field_name("right")?, source)?;
+    let body = node.child_by_field_name("body")?;
+    Some((name, argument_lists, body))
+}
+
+fn literal_argument_lists(iterable: Node<'_>, source: &[u8]) -> Option<Vec<Vec<KnownArgument>>> {
+    if !matches!(iterable.kind(), "list" | "tuple") {
+        return None;
+    }
+    let mut cursor = iterable.walk();
+    let items: Vec<_> = iterable.named_children(&mut cursor).collect();
+    if items.len() > MAX_STATIC_LOOP_ITERATIONS {
+        return None;
+    }
+    items
+        .into_iter()
+        .map(|item| literal_argument_list(item, source))
+        .collect()
+}
+
+fn literal_argument_list(item: Node<'_>, source: &[u8]) -> Option<Vec<KnownArgument>> {
+    if item.kind() != "tuple" {
+        return None;
+    }
+    let mut cursor = item.walk();
+    let arguments: Vec<_> = item.named_children(&mut cursor).collect();
+    if arguments.len() > MAX_STATIC_ARGV_ITEMS {
+        return None;
+    }
+    arguments
+        .into_iter()
+        .map(|argument| literal_string(argument, source).map(KnownArgument::Literal))
+        .collect()
+}
+
+fn clear_known_state(state: &mut ScopeState) {
     state.obj_shadowed = false;
     state.known_arguments.clear();
+    state.known_argument_lists.clear();
+}
+
+fn clear_known_argument(state: &mut ScopeState, name: &str) {
+    state.known_arguments.remove(name);
+    state.known_argument_lists.remove(name);
 }
 
 fn is_uncertain_control_flow(node: Node<'_>) -> bool {
@@ -495,7 +577,7 @@ fn analyze_assignment(
             .map(|root| ask(format!("Pyrun helper rebinding on {}", root)));
     };
 
-    state.known_arguments.remove(&name);
+    clear_known_argument(state, &name);
     if name == "obj" {
         if is_safe_obj_shadow_assignment(node, source) {
             state.obj_shadowed = true;
@@ -749,10 +831,24 @@ fn resolve_known_arguments(
     source: &[u8],
     state: &ScopeState,
 ) -> Option<Vec<KnownArgument>> {
+    if arguments.len() == 1 && arguments[0].kind() == "list_splat" {
+        return resolve_known_argument_splat(arguments[0], source, state);
+    }
     arguments
         .iter()
         .map(|argument| resolve_known_argument(*argument, source, state))
         .collect()
+}
+
+fn resolve_known_argument_splat(
+    splat: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<Vec<KnownArgument>> {
+    let mut cursor = splat.walk();
+    let value = splat.named_children(&mut cursor).next()?;
+    let name = identifier_name(value, source)?;
+    state.known_argument_lists.get(&name).cloned()
 }
 
 fn resolve_known_argument(

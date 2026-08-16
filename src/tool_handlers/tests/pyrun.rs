@@ -517,6 +517,66 @@ fn test_pyrun_eval_reported_kubectl_wait_allows() {
 }
 
 #[test]
+fn test_pyrun_eval_reported_literal_loop_command_splat_allows() {
+    let code = r#"for args in [
+ ('describe','job','mariadb-mysql-cdc-resync-stream-20260813','-n','ops'),
+ ('get','events','-n','ops','--field-selector','involvedObject.name=mariadb-mysql-cdc-resync-stream-20260813','--sort-by=.lastTimestamp'),
+ ('get','pods','-n','ops','-l','job-name=mariadb-mysql-cdc-resync-stream-20260813','-o','json'),
+]:
+ r=cli.kubectl(*args).capture().run(); print('\n===',' '.join(args),'===\n',r.stdout,r.stderr)"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_unknown_loop_command_splat_asks() {
+    let code = "for args in command_arguments():\n    cli.kubectl(*args).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_computed_literal_loop_member_asks() {
+    let code = "for args in [('get', resource)]:\n    cli.kubectl(*args).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_literal_loop_splat_preserves_command_policy() {
+    let code =
+        "for args in [('get', 'pods'), ('delete', 'pod', 'target')]:\n    cli.kubectl(*args).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_mixed_literal_and_splat_arguments_ask() {
+    let code = "for args in [('pods',)]:\n    cli.kubectl('get', *args).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_reassigned_literal_loop_splat_asks() {
+    let code = "for args in [('get', 'pods')]:\n    args = command_arguments()\n    cli.kubectl(*args).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
 fn test_pyrun_eval_static_prod_rw_select_variable_allows() {
     let code =
         "q = 'SELECT 1'\nr = cli.command('mysql-gc', '-s', 'prod-rw', '-e', q).capture().run()";
