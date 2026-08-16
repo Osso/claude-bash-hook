@@ -18,7 +18,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Unroll at most 32 iterations of literal-string argv tuples when a `for` loop uses either an inline literal list/tuple or a first, same-scope, source-ordered assignment of that bounded collection; the loop variable must be the sole direct `*args` command argument, and each expanded command still receives its normal policy decision.
 - [x] Require inline literal or proven same-scope static-string command names. Decode ordinary unprefixed single/double-quoted Python strings before policy, supporting `\\`, escaped quotes, `\\a`, `\\b`, `\\f`, `\\n`, `\\r`, `\\t`, `\\v`, and physical LF/CRLF continuations. Other escape forms and string syntaxes ask.
 - [x] Named argv collections are single-use loop provenance: aliases, reassignment, augmented assignment, other reads/escapes, body references, computed iterables or members, and unsupported literals ask.
-- [x] Resolve a builder `cwd`/`in_` value only when it is inline literal or a proven same-scope static string; aliases, reassignment, multiple arguments, and unresolved paths ask.
+- [x] Resolve a builder `cwd`/`in_` value when it is an inline literal or proven same-scope static string. A single unresolved value discards the builder cwd and evaluates the literal command and arguments under global/no-cwd policy; global Allow/Ask/Deny remains authoritative and cwd-scoped rules cannot match. Malformed calls and statically invalid paths ask.
 - [x] Classify literal `kubectl wait` as a read-only/watch operation through command policy.
 - [x] Resolve relative command working directories from the Pyrun session context and reanalyze the command under the proven builder cwd.
 - [x] Preserve the distinction between the tool-provided virtual cwd and the hook's initial cwd when resolving command and path policy.
@@ -108,6 +108,15 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_command_name_preserves_command_policy`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_static_variable_cwd_allows`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_variable_in_cwd_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_cwd_after_if_uses_global_git_policy`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_dynamic_cwd_uses_global_allow_policy`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_dynamic_cwd_preserves_global_ask`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_dynamic_in_uses_global_allow_policy`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_cannot_satisfy_cwd_scoped_rule`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_preserves_global_deny`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_does_not_allow_dynamic_commands_or_arguments`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_malformed_cwd_call_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_preserves_git_safeguards`
 - Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests/pyrun.rs` cover dynamic access, reassignment, aliases, unsupported literals and splats, path normalization, symlinks, and pure-helper allowlists.
 
 ## Known gaps (current cycle)
@@ -119,7 +128,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 
 - Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
 - Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis; trusted argument bindings are cleared across uncertain control flow.
-- Auto-allowing arbitrary dynamic, computed, aliased, or f-string command and path values; only documented same-scope static strings (including supported ordinary escapes, command program, and builder cwd), Kubernetes resource-name provenance, and bounded inline or proven single-use literal argv collections are exempt.
+- Auto-allowing arbitrary dynamic, computed, aliased, or f-string command, argument, filesystem, or output-path values. An unresolved builder cwd is not trusted as a path and cannot satisfy cwd-scoped policy, but it does not override the global decision for an otherwise literal command.
 - Raw, bytes, Unicode-prefixed, f-string, triple-quoted, concatenated, octal, hexadecimal, Unicode, named-Unicode, and unknown escape forms remain unsupported and fail closed.
 - Unknown local rebinding remains fail-closed and restores `Ask`; only documented static string arguments, Kubernetes resource-name provenance, static `json.loads(...)` local-`obj` shadowing, and proven built-in-string local-`text` shadowing are exempt.
 - Simulating `host.cd` as execution flow; `host.cd` asks instead.

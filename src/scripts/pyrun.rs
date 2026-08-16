@@ -83,6 +83,11 @@ enum KnownArgument {
     KubernetesResourceName,
 }
 
+enum CommandCwdError {
+    Dynamic,
+    Invalid(String),
+}
+
 #[derive(Clone, Copy)]
 struct VisitContext<'a> {
     source: &'a [u8],
@@ -400,22 +405,27 @@ fn analyze_named_call(
     state: &ScopeState,
 ) -> Option<PermissionResult> {
     let Some(path) = dotted_path(function, source) else {
-        return analyze_dynamic_call(function, arguments, source, state);
+        return analyze_dynamic_call(function, arguments, source);
     };
     let session_cwd = virtual_cwd.or(initial_cwd);
-    let command_virtual_cwd =
+    let (command_virtual_cwd, inherits_session_cwd, effective_initial_cwd) =
         match resolve_command_virtual_cwd(&path, call, source, session_cwd, state) {
-            Ok(cwd) => cwd,
-            Err(reason) => return Some(ask(reason)),
+            Ok(cwd) => (cwd, true, initial_cwd),
+            Err(CommandCwdError::Dynamic) => (None, false, None),
+            Err(CommandCwdError::Invalid(reason)) => return Some(ask(reason)),
         };
-    let effective_virtual_cwd = command_virtual_cwd.as_deref().or(virtual_cwd);
+    let effective_virtual_cwd = if inherits_session_cwd {
+        command_virtual_cwd.as_deref().or(virtual_cwd)
+    } else {
+        None
+    };
     analyze_static_call(
         &path,
         arguments,
         source,
         config,
         effective_virtual_cwd,
-        initial_cwd,
+        effective_initial_cwd,
         ctx,
         state,
     )
@@ -427,7 +437,7 @@ fn resolve_command_virtual_cwd(
     source: &[u8],
     session_cwd: Option<&str>,
     state: &ScopeState,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, CommandCwdError> {
     let is_command = path
         .first()
         .is_some_and(|root| COMMAND_ROOTS.contains(&root.as_str()));
@@ -468,7 +478,6 @@ fn analyze_dynamic_call(
     function: Node<'_>,
     arguments: &[Node<'_>],
     source: &[u8],
-    state: &ScopeState,
 ) -> Option<PermissionResult> {
     if is_command_stdout_strip_call(function, arguments, source) {
         return None;
@@ -478,10 +487,7 @@ fn analyze_dynamic_call(
         && COMMAND_ROOTS.contains(&root.as_str())
     {
         if BUILDER_CWD_METHODS.contains(&method.as_str()) {
-            if first_static_string_argument(arguments, source, state).is_some() {
-                return None;
-            }
-            return Some(ask(format!("dynamic Pyrun command {} is not safe", method)));
+            return None;
         }
         if BUILDER_METHODS.contains(&method.as_str()) {
             return None;
@@ -908,7 +914,7 @@ fn builder_cwd_after_call(
     source: &[u8],
     session_cwd: Option<&str>,
     state: &ScopeState,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, CommandCwdError> {
     let mut current = call;
     let mut cwd = None;
     loop {
@@ -952,11 +958,19 @@ fn builder_cwd_argument(
     source: &[u8],
     session_cwd: Option<&str>,
     state: &ScopeState,
-) -> Result<String, String> {
-    let path = first_static_string_argument(&call_arguments(call), source, state)
-        .ok_or_else(|| format!("dynamic Pyrun command {} is not safe", method))?;
-    path::resolve_path(&path, session_cwd, None)
-        .ok_or_else(|| format!("Pyrun command {} cwd cannot be resolved", method))
+) -> Result<String, CommandCwdError> {
+    let arguments = call_arguments(call);
+    if arguments.len() != 1 {
+        return Err(CommandCwdError::Invalid(format!(
+            "Pyrun command {} requires exactly one cwd argument",
+            method
+        )));
+    }
+    let path =
+        first_static_string_argument(&arguments, source, state).ok_or(CommandCwdError::Dynamic)?;
+    path::resolve_path(&path, session_cwd, None).ok_or_else(|| {
+        CommandCwdError::Invalid(format!("Pyrun command {} cwd cannot be resolved", method))
+    })
 }
 
 fn same_node(left: Option<Node<'_>>, right: Option<Node<'_>>) -> bool {

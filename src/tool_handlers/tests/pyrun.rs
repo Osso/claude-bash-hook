@@ -136,7 +136,28 @@ fn test_pyrun_eval_cli_literal_cwd_keeps_read_only_command_allowed() {
 }
 
 #[test]
-fn test_pyrun_eval_cli_dynamic_cwd_asks() {
+fn test_pyrun_eval_cli_dynamic_cwd_uses_global_allow_policy() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["cp"]
+        permission = "allow"
+        reason = "globally allowed"
+        "#,
+    )
+    .expect("config");
+    let result = pyrun_result_at(
+        "cli.cp(\"source\", \"destination\").cwd(directory).run()",
+        &config,
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_cli_dynamic_cwd_preserves_global_ask() {
     let result = pyrun_result_at(
         "cli.rm(\"passwd\").cwd(directory).run()",
         &Config::default(),
@@ -144,6 +165,30 @@ fn test_pyrun_eval_cli_dynamic_cwd_asks() {
         ExecContext::default(),
     );
     assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_reported_cwd_after_if_uses_global_git_policy() {
+    let code = r#"repo = "/syncthing/Sync/Projects/wow/SpellMeter"
+check = cli.git("diff", "--check").cwd(repo).capture().run()
+print("diff_check", check.exit_code)
+if check.exit_code != 0:
+    print(check.stdout)
+    raise RuntimeError("diff check failed")
+add = cli.git("add", "deploy.sh", "README.md").cwd(repo).capture().run()
+if add.exit_code != 0:
+    raise RuntimeError("git add failed")
+commit = cli.git("commit", "-m", "Deploy to synced Retail addon path").cwd(repo).capture().run()
+print(commit.stdout)
+print(commit.stderr)
+if commit.exit_code != 0:
+    raise RuntimeError("git commit failed")
+print("HEAD", cli.git("rev-parse", "HEAD").cwd(repo).capture().run().stdout.strip())
+print(cli.git("status", "--short", "--branch").cwd(repo).capture().run().stdout)"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
 }
 
 #[test]
@@ -156,21 +201,21 @@ fn test_pyrun_eval_reported_static_variable_cwd_allows() {
 }
 
 #[test]
-fn test_pyrun_eval_reassigned_static_variable_cwd_asks() {
+fn test_pyrun_eval_reassigned_variable_cwd_uses_global_policy() {
     let code = "repo='/tmp/project'\nrepo=choose_repo()\ncli.git('diff').cwd(repo).run()";
 
     let result = pyrun_result(code, &Config::default());
 
-    assert_eq!(result.permission, Permission::Ask);
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
 }
 
 #[test]
-fn test_pyrun_eval_static_variable_cwd_alias_asks() {
+fn test_pyrun_eval_variable_cwd_alias_uses_global_policy() {
     let code = "repo='/tmp/project'\nalias=repo\ncli.git('diff').cwd(alias).run()";
 
     let result = pyrun_result(code, &Config::default());
 
-    assert_eq!(result.permission, Permission::Ask);
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
 }
 
 #[test]
@@ -184,14 +229,118 @@ fn test_pyrun_eval_static_variable_in_cwd_allows() {
 }
 
 #[test]
-fn test_pyrun_eval_cli_dynamic_in_cwd_asks() {
+fn test_pyrun_eval_cli_dynamic_in_uses_global_allow_policy() {
     let result = pyrun_result_at(
-        "cli.rm(\"passwd\").in_(directory).run()",
+        "cli.git(\"diff\").in_(directory).run()",
         &Config::default(),
         "/home/project",
         ExecContext::default(),
     );
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_dynamic_cwd_cannot_satisfy_cwd_scoped_rule() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["custom-read"]
+        cwd = "/home/project"
+        permission = "allow"
+        reason = "cwd-scoped"
+        "#,
+    )
+    .expect("config");
+    let result = pyrun_result_at(
+        "cli.command(\"custom-read\").cwd(directory).run()",
+        &config,
+        "/home/project",
+        ExecContext::default(),
+    );
     assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_dynamic_cwd_preserves_global_deny() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["danger"]
+        permission = "deny"
+        reason = "globally denied"
+        "#,
+    )
+    .expect("config");
+    let result = pyrun_result_at(
+        "cli.danger().cwd(directory).run()",
+        &config,
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(result.permission, Permission::Deny);
+}
+
+#[test]
+fn test_pyrun_eval_dynamic_cwd_does_not_allow_dynamic_commands_or_arguments() {
+    for code in [
+        "cli.git(action).cwd(directory).run()",
+        "cli.command(program, \"diff\").cwd(directory).run()",
+    ] {
+        let result = pyrun_result_at(
+            code,
+            &Config::default(),
+            "/home/project",
+            ExecContext::default(),
+        );
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_malformed_cwd_call_asks() {
+    for code in [
+        "cli.git(\"diff\").cwd().run()",
+        "cli.git(\"diff\").cwd(one, two).run()",
+    ] {
+        let result = pyrun_result_at(
+            code,
+            &Config::default(),
+            "/home/project",
+            ExecContext::default(),
+        );
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_dynamic_cwd_preserves_git_safeguards() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["git switch -f", "git switch --force"]
+        permission = "passthrough"
+        reason = "force switch can discard changes"
+        "#,
+    )
+    .expect("config");
+    let ask = pyrun_result_at(
+        "cli.git(\"switch\", \"--force\", \"other\").cwd(directory).run()",
+        &config,
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(ask.permission, Permission::Ask);
+
+    let deny = pyrun_result_at(
+        "cli.git(\"push\", \"--force\", \"origin\", \"main\").cwd(directory).run()",
+        &config,
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(deny.permission, Permission::Deny);
 }
 
 #[test]
