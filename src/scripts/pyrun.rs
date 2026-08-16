@@ -7,7 +7,7 @@
 use crate::analysis;
 use crate::config::{Config, ExecContext, Permission, PermissionResult};
 use crate::scripts::python;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 mod path;
@@ -96,7 +96,9 @@ struct VisitContext<'a> {
 struct ScopeState {
     obj_shadowed: bool,
     local_text_is_string: bool,
+    assigned_names: HashSet<String>,
     known_arguments: HashMap<String, KnownArgument>,
+    known_argument_collections: HashMap<String, Vec<Vec<KnownArgument>>>,
     known_argument_lists: HashMap<String, Vec<KnownArgument>>,
 }
 
@@ -114,10 +116,20 @@ fn visit_nodes(
     if visit_control_node(node, context, state, findings) {
         return;
     }
+    invalidate_used_argument_collection(node, context.source, state);
     if let Some(result) = analyze_node_call(node, context, state) {
         findings.push(result);
     }
     visit_child_nodes(node, context, state, findings);
+}
+
+fn invalidate_used_argument_collection(node: Node<'_>, source: &[u8], state: &mut ScopeState) {
+    let Some(name) = identifier_name(node, source) else {
+        return;
+    };
+    if state.known_argument_collections.contains_key(&name) {
+        clear_known_argument(state, &name);
+    }
 }
 
 fn visit_control_node(
@@ -164,7 +176,8 @@ fn visit_static_argument_loop(
     state: &mut ScopeState,
     findings: &mut Vec<PermissionResult>,
 ) -> bool {
-    let Some((name, argument_lists, body)) = static_argument_loop(node, context.source) else {
+    let Some((name, argument_lists, body)) = static_argument_loop(node, context.source, state)
+    else {
         return false;
     };
     for arguments in argument_lists {
@@ -181,6 +194,7 @@ fn visit_static_argument_loop(
 fn static_argument_loop<'a>(
     node: Node<'a>,
     source: &[u8],
+    state: &ScopeState,
 ) -> Option<(String, Vec<Vec<KnownArgument>>, Node<'a>)> {
     if node.kind() != "for_statement" || node.child_by_field_name("alternative").is_some() {
         return None;
@@ -189,9 +203,35 @@ fn static_argument_loop<'a>(
     if RESERVED_ROOTS.contains(&name.as_str()) {
         return None;
     }
-    let argument_lists = literal_argument_lists(node.child_by_field_name("right")?, source)?;
+    let iterable = node.child_by_field_name("right")?;
     let body = node.child_by_field_name("body")?;
+    let argument_lists = resolve_static_argument_lists(iterable, body, source, state)?;
     Some((name, argument_lists, body))
+}
+
+fn resolve_static_argument_lists(
+    iterable: Node<'_>,
+    body: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<Vec<Vec<KnownArgument>>> {
+    if let Some(argument_lists) = literal_argument_lists(iterable, source) {
+        return Some(argument_lists);
+    }
+    let name = identifier_name(iterable, source)?;
+    if contains_identifier(body, &name, source) {
+        return None;
+    }
+    state.known_argument_collections.get(&name).cloned()
+}
+
+fn contains_identifier(node: Node<'_>, name: &str, source: &[u8]) -> bool {
+    if identifier_name(node, source).as_deref() == Some(name) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| contains_identifier(child, name, source))
 }
 
 fn literal_argument_lists(iterable: Node<'_>, source: &[u8]) -> Option<Vec<Vec<KnownArgument>>> {
@@ -227,12 +267,15 @@ fn literal_argument_list(item: Node<'_>, source: &[u8]) -> Option<Vec<KnownArgum
 fn clear_known_state(state: &mut ScopeState) {
     state.obj_shadowed = false;
     state.local_text_is_string = false;
+    state.assigned_names.clear();
     state.known_arguments.clear();
+    state.known_argument_collections.clear();
     state.known_argument_lists.clear();
 }
 
 fn clear_known_argument(state: &mut ScopeState, name: &str) {
     state.known_arguments.remove(name);
+    state.known_argument_collections.remove(name);
     state.known_argument_lists.remove(name);
 }
 
@@ -596,39 +639,76 @@ fn analyze_assignment(
             .filter(|root| RESERVED_ROOTS.contains(&root.as_str()))
             .map(|root| ask(format!("Pyrun helper rebinding on {}", root)));
     };
-
-    clear_known_argument(state, &name);
-    if name == "obj" {
-        if is_safe_obj_shadow_assignment(node, source) {
-            state.obj_shadowed = true;
-            return None;
-        }
-        state.obj_shadowed = false;
-        return Some(ask("Pyrun helper rebinding on obj".to_string()));
-    }
-    if name == "text" {
-        if is_proven_text_assignment(node, source, state) {
-            state.local_text_is_string = true;
-            return None;
-        }
-        state.local_text_is_string = false;
-        return Some(ask("Pyrun helper rebinding on text".to_string()));
-    }
     if RESERVED_ROOTS.contains(&name.as_str()) {
-        return Some(ask(format!("Pyrun helper rebinding on {}", name)));
+        return analyze_reserved_assignment(node, source, state, &name);
     }
 
+    let is_first_assignment = state.assigned_names.insert(name.clone());
+    clear_known_argument(state, &name);
+    record_known_assignment(node, source, state, name, is_first_assignment);
+    assignment_alias_result(node, source)
+}
+
+fn analyze_reserved_assignment(
+    node: Node<'_>,
+    source: &[u8],
+    state: &mut ScopeState,
+    name: &str,
+) -> Option<PermissionResult> {
+    match name {
+        "obj" if is_safe_obj_shadow_assignment(node, source) => {
+            state.obj_shadowed = true;
+            None
+        }
+        "obj" => {
+            state.obj_shadowed = false;
+            Some(ask("Pyrun helper rebinding on obj".to_string()))
+        }
+        "text" if is_proven_text_assignment(node, source, state) => {
+            state.local_text_is_string = true;
+            None
+        }
+        "text" => {
+            state.local_text_is_string = false;
+            Some(ask("Pyrun helper rebinding on text".to_string()))
+        }
+        _ => Some(ask(format!("Pyrun helper rebinding on {}", name))),
+    }
+}
+
+fn record_known_assignment(
+    node: Node<'_>,
+    source: &[u8],
+    state: &mut ScopeState,
+    name: String,
+    is_first_assignment: bool,
+) {
+    if is_first_assignment
+        && let Some(collection) = known_argument_collection_from_assignment(node, source)
+    {
+        state
+            .known_argument_collections
+            .insert(name.clone(), collection);
+    }
     if let Some(argument) = known_argument_from_assignment(node, source, state) {
         state.known_arguments.insert(name, argument);
     }
-
-    assignment_alias_result(node, source)
 }
 
 fn identifier_name(node: Node<'_>, source: &[u8]) -> Option<String> {
     (node.kind() == "identifier")
         .then(|| node.utf8_text(source).ok().map(str::to_string))
         .flatten()
+}
+
+fn known_argument_collection_from_assignment(
+    node: Node<'_>,
+    source: &[u8],
+) -> Option<Vec<Vec<KnownArgument>>> {
+    if node.kind() != "assignment" {
+        return None;
+    }
+    literal_argument_lists(node.child_by_field_name("right")?, source)
 }
 
 fn known_argument_from_assignment(

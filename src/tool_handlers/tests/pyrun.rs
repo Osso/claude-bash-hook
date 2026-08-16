@@ -604,6 +604,81 @@ fn test_pyrun_eval_reported_literal_loop_command_splat_allows() {
 }
 
 #[test]
+fn test_pyrun_eval_reported_static_loop_collection_allows() {
+    let code = r#"import json
+cmds=[
+ ('get','kustomization','infra-ops','-n','flux-system','-o','json'),
+ ('get','deployment','mariadb-mysql-cdc-stream','-n','ops','-o','json'),
+ ('get','job','mariadb-mysql-cdc-resync-stream-20260813','-n','ops','-o','json'),
+ ('get','pods','-n','ops','-l','app in (mariadb-mysql-cdc-stream,mariadb-mysql-cdc-resync-stream)','-o','json'),
+]
+for args in cmds:
+ r=cli.kubectl(*args).capture().run(); print('CMD',args,'RC',r.returncode); print(r.stdout[:12000]); print(r.stderr[:2000])"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_static_loop_collection_remains_fail_closed() {
+    for code in [
+        "cmds = command_arguments()\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\ncmds = command_arguments()\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\ncmds = [('get', 'deployments')]\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\ncmds += [('get', 'deployments')]\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\nalias = cmds\nfor args in alias:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', resource)]\nfor args in cmds:\n    cli.kubectl(*args).run()",
+    ] {
+        let result = pyrun_result(code, &Config::default());
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_static_loop_collection_mutation_asks() {
+    for code in [
+        "cmds = [('get', 'pods')]\ncmds.append(('delete', 'pod', 'target'))\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\ncmds[0] = ('delete', 'pod', 'target')\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\nmutate(cmds)\nfor args in cmds:\n    cli.kubectl(*args).run()",
+        "cmds = [('get', 'pods')]\nfor args in cmds:\n    cmds.append(('delete', 'pod', 'target'))\n    cli.kubectl(*args).run()",
+    ] {
+        let result = pyrun_result(code, &Config::default());
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_static_loop_collection_preserves_command_policy() {
+    let code = "cmds = [('get', 'pods'), ('delete', 'pod', 'target')]\nfor args in cmds:\n    cli.kubectl(*args).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_static_loop_collection_limits_ask() {
+    let commands = (0..33)
+        .map(|index| format!("('get', 'pod', 'pod-{index}')"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let too_many_iterations =
+        format!("cmds = [{commands}]\nfor args in cmds:\n    cli.kubectl(*args).run()");
+
+    let mut arguments = vec!["'get'".to_string()];
+    arguments.extend((0..64).map(|index| format!("'value-{index}'")));
+    let arguments = arguments.join(", ");
+    let too_many_arguments =
+        format!("cmds = [({arguments})]\nfor args in cmds:\n    cli.kubectl(*args).run()");
+
+    for code in [too_many_iterations, too_many_arguments] {
+        let result = pyrun_result(&code, &Config::default());
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
 fn test_pyrun_eval_unknown_loop_command_splat_asks() {
     let code = "for args in command_arguments():\n    cli.kubectl(*args).run()";
 
