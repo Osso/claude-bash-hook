@@ -1,6 +1,6 @@
 # Pyrun permissions
 
-Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_eval` program before Pyrun evaluates it. The contract is exercised by tests in [`src/tool_handlers/tests.rs`](../../src/tool_handlers/tests.rs); implementation references are [`src/scripts/pyrun.rs`](../../src/scripts/pyrun.rs) and [`src/scripts/pyrun/path.rs`](../../src/scripts/pyrun/path.rs).
+Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_eval` program before Pyrun evaluates it. The contract is exercised by tests in [`src/tool_handlers/tests/pyrun.rs`](../../src/tool_handlers/tests/pyrun.rs); implementation references are [`src/scripts/pyrun.rs`](../../src/scripts/pyrun.rs) and [`src/scripts/pyrun/path.rs`](../../src/scripts/pyrun/path.rs).
 
 ## What it must do
 
@@ -31,8 +31,10 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 ### Helpers and fail-closed behavior
 
 - [x] Allow only the tested read-only helper surface for `rg`, `fd`, `text`, `seq`, `obj`, and `hr`.
+- [x] Allow a local `obj` assigned from static `json.loads(...)` to shadow Pyrun's pure `obj` namespace within the same lexical scope and only after that assignment, so ordinary read-only dictionary calls and chained `.get()` calls do not prompt.
+- [x] Restore `Ask` after arbitrary or unsafe reassignment of local `obj`; genuine unshadowed Pyrun `obj.get` remains allowed.
 - [x] Ask for network, privileged, bridge, command-adjacent, or otherwise side-effecting helper roots such as `http`, `tools`, `kubectl`, `sqlite`, `pi`, and `tmp`.
-- [x] Ask for dynamic access, reserved-helper rebinding or aliasing, unknown helper methods, and unsupported helper literals.
+- [x] Ask for dynamic access, reserved-helper rebinding or aliasing, unknown helper methods, and unsupported helper literals, except for the static `json.loads(...)` local-`obj` shadowing rule above.
 - [x] Ask for every statically unknown Pyrun command and filesystem method with dedicated behavioral coverage.
 
 ## How it works
@@ -54,28 +56,32 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 
 ## Tests asserting this spec
 
-- `src/tool_handlers/tests.rs::test_pyrun_eval_syntax_error_denies`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_run_git_diff_allows`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_run_rm_etc_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_literal_run_command_allows`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_dynamic_command_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_unknown_command_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_cli_relative_cwd_resolves_from_session_cwd`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_cli_literal_cwd_reanalyzes_relative_command`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_host_cd_invalidates_relative_path_context`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_safe_fs_read_allows`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_protected_fs_read_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_tmp_write_allows`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_protected_write_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_protected_remove_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_unknown_filesystem_method_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_cli_output_protected_path_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_http_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_tools_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_pi_bridge_asks`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_selects_most_restrictive_call`
-- `src/tool_handlers/tests.rs::test_pyrun_eval_deny_wins_over_ask`
-- Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests.rs` cover dynamic access, aliases, unsupported literals, path normalization, symlinks, and pure-helper allowlists.
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_syntax_error_denies`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_run_git_diff_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_run_rm_etc_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_literal_run_command_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_command_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_unknown_command_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_relative_cwd_resolves_from_session_cwd`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_literal_cwd_reanalyzes_relative_command`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_host_cd_invalidates_relative_path_context`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_safe_fs_read_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_protected_fs_read_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_tmp_write_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_protected_write_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_protected_remove_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_unknown_filesystem_method_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_output_protected_path_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_http_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_tools_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_pi_bridge_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_selects_most_restrictive_call`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_deny_wins_over_ask`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_rebinding_reserved_helper_target_asks`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_json_loaded_obj_shadow_allows_reported_read_only_shape`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_json_loaded_obj_shadow_is_scope_and_order_aware`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_unshadowed_obj_namespace_stays_allowed`
+- Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests/pyrun.rs` cover dynamic access, aliases, unsupported literals, path normalization, symlinks, and pure-helper allowlists.
 
 ## Known gaps (current cycle)
 
@@ -85,7 +91,8 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 ## Out of scope
 
 - Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
-- Full semantic proof of arbitrary Python behavior.
+- Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis.
 - Auto-allowing dynamic, escaped, or f-string command and path literals; these remain ask cases.
+- Unknown local rebinding remains fail-closed and restores `Ask`; only the documented static `json.loads(...)` local-`obj` shadow is exempt.
 - Simulating `host.cd` as execution flow; `host.cd` asks instead.
 - Changes to Pyrun, Pi, command configuration format, or unrelated hook analyzers.

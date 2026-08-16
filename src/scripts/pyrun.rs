@@ -59,7 +59,7 @@ pub fn check_pyrun_code(
     }
 
     let mut findings = Vec::new();
-    visit_calls(
+    visit_scope(
         tree.root_node(),
         code.as_bytes(),
         config,
@@ -73,7 +73,12 @@ pub fn check_pyrun_code(
     analysis::allow_in_bypass(most_restrictive(findings), ctx)
 }
 
-fn visit_calls(
+#[derive(Default)]
+struct ShadowState {
+    obj_shadowed: bool,
+}
+
+fn visit_scope(
     node: Node<'_>,
     source: &[u8],
     config: &Config,
@@ -82,19 +87,71 @@ fn visit_calls(
     ctx: ExecContext,
     findings: &mut Vec<PermissionResult>,
 ) {
-    if let Some(result) = analyze_reserved_alias(node, source) {
-        findings.push(result);
+    let mut state = ShadowState::default();
+    visit_child_nodes(
+        node,
+        source,
+        config,
+        virtual_cwd,
+        initial_cwd,
+        ctx,
+        &mut state,
+        findings,
+    );
+}
+
+fn visit_nodes(
+    node: Node<'_>,
+    source: &[u8],
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+    state: &mut ShadowState,
+    findings: &mut Vec<PermissionResult>,
+) {
+    if visit_control_node(
+        node,
+        source,
+        config,
+        virtual_cwd,
+        initial_cwd,
+        ctx,
+        state,
+        findings,
+    ) {
+        return;
     }
-    if node.kind() == "call"
-        && let Some(result) = analyze_call(node, source, config, virtual_cwd, initial_cwd, ctx)
+    if let Some(result) =
+        analyze_node_call(node, source, config, virtual_cwd, initial_cwd, ctx, state)
     {
         findings.push(result);
     }
+    visit_child_nodes(
+        node,
+        source,
+        config,
+        virtual_cwd,
+        initial_cwd,
+        ctx,
+        state,
+        findings,
+    );
+}
 
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        visit_calls(
-            child,
+fn visit_control_node(
+    node: Node<'_>,
+    source: &[u8],
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+    state: &mut ShadowState,
+    findings: &mut Vec<PermissionResult>,
+) -> bool {
+    if is_lexical_scope(node) {
+        visit_scope(
+            node,
             source,
             config,
             virtual_cwd,
@@ -102,7 +159,93 @@ fn visit_calls(
             ctx,
             findings,
         );
+        return true;
     }
+    if node.kind() == "assignment" {
+        visit_assignment(
+            node,
+            source,
+            config,
+            virtual_cwd,
+            initial_cwd,
+            ctx,
+            state,
+            findings,
+        );
+        return true;
+    }
+    false
+}
+
+fn analyze_node_call(
+    node: Node<'_>,
+    source: &[u8],
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+    state: &ShadowState,
+) -> Option<PermissionResult> {
+    (node.kind() == "call")
+        .then(|| analyze_call(node, source, config, virtual_cwd, initial_cwd, ctx, state))
+        .flatten()
+}
+
+fn visit_child_nodes(
+    node: Node<'_>,
+    source: &[u8],
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+    state: &mut ShadowState,
+    findings: &mut Vec<PermissionResult>,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_nodes(
+            child,
+            source,
+            config,
+            virtual_cwd,
+            initial_cwd,
+            ctx,
+            state,
+            findings,
+        );
+    }
+}
+
+fn visit_assignment(
+    node: Node<'_>,
+    source: &[u8],
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+    state: &mut ShadowState,
+    findings: &mut Vec<PermissionResult>,
+) {
+    visit_child_nodes(
+        node,
+        source,
+        config,
+        virtual_cwd,
+        initial_cwd,
+        ctx,
+        state,
+        findings,
+    );
+    if let Some(result) = analyze_assignment(node, source, state) {
+        findings.push(result);
+    }
+}
+
+fn is_lexical_scope(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "function_definition" | "lambda" | "class_definition"
+    )
 }
 
 fn analyze_call(
@@ -112,9 +255,13 @@ fn analyze_call(
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     ctx: ExecContext,
+    state: &ShadowState,
 ) -> Option<PermissionResult> {
     let function = call.child_by_field_name("function")?;
     let arguments = call_arguments(call);
+    if state.obj_shadowed && root_name(function, source).as_deref() == Some("obj") {
+        return None;
+    }
     if let Some(result) = analyze_reserved_access(function, &arguments, source) {
         return Some(result);
     }
@@ -370,12 +517,20 @@ fn analyze_reserved_access(
         .then(|| ask(format!("dynamic Pyrun helper access on {}", root)))
 }
 
-fn analyze_reserved_alias(node: Node<'_>, source: &[u8]) -> Option<PermissionResult> {
-    if node.kind() != "assignment" {
-        return None;
-    }
-
+fn analyze_assignment(
+    node: Node<'_>,
+    source: &[u8],
+    state: &mut ShadowState,
+) -> Option<PermissionResult> {
     let target = node.child_by_field_name("left")?;
+    if target.kind() == "identifier" && target.utf8_text(source).ok() == Some("obj") {
+        if is_safe_obj_shadow_assignment(node, source) {
+            state.obj_shadowed = true;
+            return None;
+        }
+        state.obj_shadowed = false;
+        return Some(ask("Pyrun helper rebinding on obj".to_string()));
+    }
     if let Some(root) = root_name(target, source)
         && RESERVED_ROOTS.contains(&root.as_str())
     {
@@ -391,6 +546,17 @@ fn analyze_reserved_alias(node: Node<'_>, source: &[u8]) -> Option<PermissionRes
     RESERVED_ROOTS
         .contains(&root.as_str())
         .then(|| ask(format!("Pyrun helper alias {}", path.join("."))))
+}
+
+fn is_safe_obj_shadow_assignment(node: Node<'_>, source: &[u8]) -> bool {
+    let Some(value) = node.child_by_field_name("right") else {
+        return false;
+    };
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    dotted_path(function, source)
+        .is_some_and(|path| path == ["json".to_string(), "loads".to_string()])
 }
 
 fn builder_cwd_after_call(
