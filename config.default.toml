@@ -150,7 +150,7 @@ reason = "docker destructive"
 # Kubectl read-only and safe operations
 [[rules]]
 commands = [
-    "kubectl get", "kubectl describe", "kubectl logs",
+    "kubectl get", "kubectl describe", "kubectl logs", "kubectl wait",
     "kubectl explain", "kubectl api-resources", "kubectl top", "kubectl cluster-info", "kubectl kustomize",
     "kubectl rollout history", "kubectl rollout status",
     "kubectl cp",

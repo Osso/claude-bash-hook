@@ -12,8 +12,11 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 
 ### Commands and context
 
-- [x] Analyze literal `run.*` and `cli.*` commands with the existing literal-command policy, including configured command permissions and main-thread restrictions.
-- [x] Require literal command names and arguments; dynamic command names, arguments, attributes, builder `cwd`/`in_` values, and unsupported literals ask.
+- [x] Analyze `run.*` and `cli.*` commands with the existing literal-command policy, including configured command permissions and main-thread restrictions.
+- [x] Resolve same-scope, source-ordered local string assignments when used directly as command arguments; later, augmented, conditional, or unknown reassignment invalidates the value.
+- [x] Allow a Kubernetes resource name only when it comes from the exact read-only `kubectl get pod(s) -o jsonpath={.items[0].metadata.name}` captured-stdout `.strip()` flow, and only as an argument to `kubectl logs` or `kubectl top`.
+- [x] Require literal command names. Other dynamic arguments, attributes, builder `cwd`/`in_` values, and unsupported literals ask.
+- [x] Classify literal `kubectl wait` as a read-only/watch operation through command policy.
 - [x] Resolve relative command working directories from the Pyrun session context and reanalyze the command under a literal builder cwd.
 - [x] Preserve the distinction between the tool-provided virtual cwd and the hook's initial cwd when resolving command and path policy.
 - [x] Apply aggregation ordering `deny > ask > allow` with a behavioral test covering a deny and ask in the same program.
@@ -81,7 +84,11 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_json_loaded_obj_shadow_allows_reported_read_only_shape`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_json_loaded_obj_shadow_is_scope_and_order_aware`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_unshadowed_obj_namespace_stays_allowed`
-- Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests/pyrun.rs` cover dynamic access, aliases, unsupported literals, path normalization, symlinks, and pure-helper allowlists.
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_static_mysql_query_variable_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_prod_rw_select_variable_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_kubectl_resource_name_flow_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_kubectl_wait_allows`
+- Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests/pyrun.rs` cover dynamic access, reassignment, aliases, unsupported literals, path normalization, symlinks, and pure-helper allowlists.
 
 ## Known gaps (current cycle)
 
@@ -91,8 +98,8 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 ## Out of scope
 
 - Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
-- Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis.
-- Auto-allowing dynamic, escaped, or f-string command and path literals; these remain ask cases.
-- Unknown local rebinding remains fail-closed and restores `Ask`; only the documented static `json.loads(...)` local-`obj` shadow is exempt.
+- Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis; trusted argument bindings are cleared across uncertain control flow.
+- Auto-allowing arbitrary dynamic, escaped, computed, or f-string command and path values; only documented same-scope static strings and Kubernetes resource-name provenance are exempt.
+- Unknown local rebinding remains fail-closed and restores `Ask`; only documented static string arguments, Kubernetes resource-name provenance, and static `json.loads(...)` local-`obj` shadowing are exempt.
 - Simulating `host.cd` as execution flow; `host.cd` asks instead.
 - Changes to Pyrun, Pi, command configuration format, or unrelated hook analyzers.

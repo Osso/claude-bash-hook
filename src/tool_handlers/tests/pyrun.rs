@@ -484,6 +484,104 @@ fn test_pyrun_eval_dynamic_argument_asks() {
 }
 
 #[test]
+fn test_pyrun_eval_reported_static_mysql_query_variable_allows() {
+    let code = r#"import json
+job='mariadb-mysql-cdc-resync-stream-20260813'
+r=cli.kubectl('get','job',job,'-n','ops','-o','json').capture().run(); d=json.loads(r.stdout); print(json.dumps({'active':d.get('status',{}).get('active',0),'succeeded':d.get('status',{}).get('succeeded',0),'failed':d.get('status',{}).get('failed',0),'conditions':d.get('status',{}).get('conditions',[])},indent=2))
+q="SELECT status,COUNT(*) FROM cdc.table_sync_runs WHERE run_id LIKE 'resync-stream:globalcomix-prod-mariadb-resync-2026-08-13-%' GROUP BY status ORDER BY status; SELECT run_id,table_name,status,rows_scanned,total_rows,inserts_applied,updates_applied,extra_target_rows,last_primary_key_json,LEFT(last_error, 200),updated_at FROM cdc.table_sync_runs WHERE run_id LIKE 'resync-stream:globalcomix-prod-mariadb-resync-2026-08-13-%' AND status <> 'complete' ORDER BY updated_at DESC,table_name;"
+r=cli.command('/home/osso/.cargo/bin/mysql-gc','-s','do-managed','-N','-B','-e',q).capture().run(); print(r.stdout); print(r.stderr)"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_reported_kubectl_resource_name_flow_allows() {
+    let code = r#"pod=cli.kubectl('get','pods','-n','ops','-l','job-name=mariadb-mysql-cdc-resync-stream-20260813','-o','jsonpath={.items[0].metadata.name}').capture().run().stdout.strip()
+r=cli.kubectl('logs','-n','ops',pod,'--since=15m','--timestamps=true').capture().run(); print('\n'.join(r.stdout.splitlines()[-120:])); print(r.stderr)
+r=cli.kubectl('top','pod','-n','ops',pod).capture().run(); print(r.stdout); print(r.stderr)"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_reported_kubectl_wait_allows() {
+    let code = "r=cli.kubectl('wait','--for=condition=complete','job/mariadb-mysql-cdc-resync-stream-20260813','-n','ops','--timeout=480s').capture().run()\nprint('exit',r.exit_code)\nprint(r.stdout)\nprint(r.stderr)";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_static_prod_rw_select_variable_allows() {
+    let code =
+        "q = 'SELECT 1'\nr = cli.command('mysql-gc', '-s', 'prod-rw', '-e', q).capture().run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_reassigned_static_prod_rw_query_asks() {
+    let code = "q = 'SELECT 1'\nq = build_query()\nr = cli.command('mysql-gc', '-s', 'prod-rw', '-e', q).capture().run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_static_prod_rw_write_variable_asks() {
+    let code = "q = 'DELETE FROM users'\nr = cli.command('mysql-gc', '-s', 'prod-rw', '-e', q).capture().run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_conditional_reassignment_invalidates_static_argument() {
+    let code = "q = 'SELECT 1'\nif should_write:\n    q = 'DELETE FROM users'\nr = cli.command('mysql-gc', '-s', 'prod-rw', '-e', q).capture().run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_untrusted_kubectl_resource_name_asks() {
+    let result = pyrun_result("cli.kubectl('logs', pod).run()", &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_kubectl_resource_name_cannot_select_subcommand() {
+    let code = r#"pod=cli.kubectl('get','pods','-o','jsonpath={.items[0].metadata.name}').capture().run().stdout.strip()
+cli.kubectl(pod, 'pods').run()"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_reassigned_kubectl_resource_name_asks() {
+    let code = r#"pod=cli.kubectl('get','pods','-o','jsonpath={.items[0].metadata.name}').capture().run().stdout.strip()
+pod=choose_pod()
+cli.kubectl('logs', pod).run()"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
 fn test_pyrun_eval_dynamic_attribute_asks() {
     let result = pyrun_result("run[program](\"diff\")", &Config::default());
     assert_eq!(result.permission, Permission::Ask);

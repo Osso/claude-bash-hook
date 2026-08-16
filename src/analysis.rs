@@ -506,7 +506,8 @@ fn check_database(
     if let Some(result) = mysql_gc::check_profile(cmd, piped_query) {
         return Some(result);
     }
-    if config.is_mysql_alias(&cmd.name) {
+    let command_name = cmd.name.rsplit('/').next().unwrap_or(&cmd.name);
+    if config.is_mysql_alias(command_name) {
         return Some(
             check_database_query(sql::check_mysql_query(cmd), piped_query).unwrap_or_else(|| {
                 PermissionResult {

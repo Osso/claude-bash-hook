@@ -7,6 +7,7 @@
 use crate::analysis;
 use crate::config::{Config, ExecContext, Permission, PermissionResult};
 use crate::scripts::python;
+use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
 mod path;
@@ -20,6 +21,8 @@ const RESERVED_ROOTS: &[&str] = &[
     "text", "seq", "obj", "hr",
 ];
 const BUILDER_CWD_METHODS: &[&str] = &["cwd", "in_"];
+const KUBERNETES_NAME_JSONPATH: &str = "jsonpath={.items[0].metadata.name}";
+const KUBERNETES_RESOURCE_PLACEHOLDER: &str = "pyrun-kubernetes-resource";
 const BUILDER_METHODS: &[&str] = &[
     "capture",
     "cwd",
@@ -58,185 +61,143 @@ pub fn check_pyrun_code(
         return deny("Pyrun code contains a Python syntax error");
     }
 
-    let mut findings = Vec::new();
-    visit_scope(
-        tree.root_node(),
-        code.as_bytes(),
+    let context = VisitContext {
+        source: code.as_bytes(),
         config,
         virtual_cwd,
         initial_cwd,
-        ctx,
-        &mut findings,
-    );
+        execution: ctx,
+    };
+    let mut findings = Vec::new();
+    visit_scope(tree.root_node(), context, &mut findings);
 
     findings.push(python::check_python_code(code, initial_cwd));
     analysis::allow_in_bypass(most_restrictive(findings), ctx)
 }
 
-#[derive(Default)]
-struct ShadowState {
-    obj_shadowed: bool,
+#[derive(Clone)]
+enum KnownArgument {
+    Literal(String),
+    KubernetesResourceName,
 }
 
-fn visit_scope(
-    node: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    findings: &mut Vec<PermissionResult>,
-) {
-    let mut state = ShadowState::default();
-    visit_child_nodes(
-        node,
-        source,
-        config,
-        virtual_cwd,
-        initial_cwd,
-        ctx,
-        &mut state,
-        findings,
-    );
+#[derive(Clone, Copy)]
+struct VisitContext<'a> {
+    source: &'a [u8],
+    config: &'a Config,
+    virtual_cwd: Option<&'a str>,
+    initial_cwd: Option<&'a str>,
+    execution: ExecContext,
+}
+
+#[derive(Clone, Default)]
+struct ScopeState {
+    obj_shadowed: bool,
+    known_arguments: HashMap<String, KnownArgument>,
+}
+
+fn visit_scope(node: Node<'_>, context: VisitContext<'_>, findings: &mut Vec<PermissionResult>) {
+    let mut state = ScopeState::default();
+    visit_child_nodes(node, context, &mut state, findings);
 }
 
 fn visit_nodes(
     node: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    state: &mut ShadowState,
+    context: VisitContext<'_>,
+    state: &mut ScopeState,
     findings: &mut Vec<PermissionResult>,
 ) {
-    if visit_control_node(
-        node,
-        source,
-        config,
-        virtual_cwd,
-        initial_cwd,
-        ctx,
-        state,
-        findings,
-    ) {
+    if visit_control_node(node, context, state, findings) {
         return;
     }
-    if let Some(result) =
-        analyze_node_call(node, source, config, virtual_cwd, initial_cwd, ctx, state)
-    {
+    if let Some(result) = analyze_node_call(node, context, state) {
         findings.push(result);
     }
-    visit_child_nodes(
-        node,
-        source,
-        config,
-        virtual_cwd,
-        initial_cwd,
-        ctx,
-        state,
-        findings,
-    );
+    visit_child_nodes(node, context, state, findings);
 }
 
 fn visit_control_node(
     node: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    state: &mut ShadowState,
+    context: VisitContext<'_>,
+    state: &mut ScopeState,
     findings: &mut Vec<PermissionResult>,
 ) -> bool {
     if is_lexical_scope(node) {
-        visit_scope(
-            node,
-            source,
-            config,
-            virtual_cwd,
-            initial_cwd,
-            ctx,
-            findings,
-        );
+        visit_scope(node, context, findings);
         return true;
     }
-    if node.kind() == "assignment" {
-        visit_assignment(
-            node,
-            source,
-            config,
-            virtual_cwd,
-            initial_cwd,
-            ctx,
-            state,
-            findings,
-        );
+    if is_uncertain_control_flow(node) {
+        visit_uncertain_control_flow(node, context, state, findings);
+        return true;
+    }
+    if is_assignment(node) {
+        visit_assignment(node, context, state, findings);
         return true;
     }
     false
 }
 
+fn visit_uncertain_control_flow(
+    node: Node<'_>,
+    context: VisitContext<'_>,
+    state: &mut ScopeState,
+    findings: &mut Vec<PermissionResult>,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        let mut branch_state = state.clone();
+        visit_nodes(child, context, &mut branch_state, findings);
+    }
+    state.obj_shadowed = false;
+    state.known_arguments.clear();
+}
+
+fn is_uncertain_control_flow(node: Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "if_statement"
+            | "for_statement"
+            | "while_statement"
+            | "try_statement"
+            | "with_statement"
+            | "match_statement"
+    )
+}
+
+fn is_assignment(node: Node<'_>) -> bool {
+    matches!(node.kind(), "assignment" | "augmented_assignment")
+}
+
 fn analyze_node_call(
     node: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    state: &ShadowState,
+    context: VisitContext<'_>,
+    state: &ScopeState,
 ) -> Option<PermissionResult> {
     (node.kind() == "call")
-        .then(|| analyze_call(node, source, config, virtual_cwd, initial_cwd, ctx, state))
+        .then(|| analyze_call(node, context, state))
         .flatten()
 }
 
 fn visit_child_nodes(
     node: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    state: &mut ShadowState,
+    context: VisitContext<'_>,
+    state: &mut ScopeState,
     findings: &mut Vec<PermissionResult>,
 ) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        visit_nodes(
-            child,
-            source,
-            config,
-            virtual_cwd,
-            initial_cwd,
-            ctx,
-            state,
-            findings,
-        );
+        visit_nodes(child, context, state, findings);
     }
 }
 
 fn visit_assignment(
     node: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    state: &mut ShadowState,
+    context: VisitContext<'_>,
+    state: &mut ScopeState,
     findings: &mut Vec<PermissionResult>,
 ) {
-    visit_child_nodes(
-        node,
-        source,
-        config,
-        virtual_cwd,
-        initial_cwd,
-        ctx,
-        state,
-        findings,
-    );
-    if let Some(result) = analyze_assignment(node, source, state) {
+    visit_child_nodes(node, context, state, findings);
+    if let Some(result) = analyze_assignment(node, context.source, state) {
         findings.push(result);
     }
 }
@@ -250,29 +211,25 @@ fn is_lexical_scope(node: Node<'_>) -> bool {
 
 fn analyze_call(
     call: Node<'_>,
-    source: &[u8],
-    config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
-    ctx: ExecContext,
-    state: &ShadowState,
+    context: VisitContext<'_>,
+    state: &ScopeState,
 ) -> Option<PermissionResult> {
     let function = call.child_by_field_name("function")?;
     let arguments = call_arguments(call);
-    if state.obj_shadowed && root_name(function, source).as_deref() == Some("obj") {
+    if state.obj_shadowed && root_name(function, context.source).as_deref() == Some("obj") {
         return None;
     }
-    if let Some(result) = analyze_reserved_access(function, &arguments, source) {
+    if let Some(result) = analyze_reserved_access(function, &arguments, context.source) {
         return Some(result);
     }
     if let Some(result) = analyze_output_call(
         function,
         &arguments,
-        source,
-        config,
-        virtual_cwd,
-        initial_cwd,
-        ctx,
+        context.source,
+        context.config,
+        context.virtual_cwd,
+        context.initial_cwd,
+        context.execution,
     ) {
         return Some(result);
     }
@@ -280,11 +237,12 @@ fn analyze_call(
         call,
         function,
         &arguments,
-        source,
-        config,
-        virtual_cwd,
-        initial_cwd,
-        ctx,
+        context.source,
+        context.config,
+        context.virtual_cwd,
+        context.initial_cwd,
+        context.execution,
+        state,
     )
 }
 
@@ -297,6 +255,7 @@ fn analyze_named_call(
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     ctx: ExecContext,
+    state: &ScopeState,
 ) -> Option<PermissionResult> {
     let Some(path) = dotted_path(function, source) else {
         return analyze_dynamic_call(function, arguments, source);
@@ -315,6 +274,7 @@ fn analyze_named_call(
         effective_virtual_cwd,
         initial_cwd,
         ctx,
+        state,
     )
 }
 
@@ -365,6 +325,9 @@ fn analyze_dynamic_call(
     arguments: &[Node<'_>],
     source: &[u8],
 ) -> Option<PermissionResult> {
+    if is_command_stdout_strip_call(function, arguments, source) {
+        return None;
+    }
     let root = root_name(function, source)?;
     if let Some(method) = attribute_name(function, source)
         && COMMAND_ROOTS.contains(&root.as_str())
@@ -392,6 +355,7 @@ fn analyze_static_call(
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     ctx: ExecContext,
+    state: &ScopeState,
 ) -> Option<PermissionResult> {
     let root = path.first()?.as_str();
     match root {
@@ -403,6 +367,7 @@ fn analyze_static_call(
             virtual_cwd,
             initial_cwd,
             ctx,
+            state,
         )),
         "host" => Some(analyze_host_call(path)),
         "fs" => Some(path::analyze_filesystem_call(
@@ -465,6 +430,7 @@ fn analyze_command_call(
     virtual_cwd: Option<&str>,
     initial_cwd: Option<&str>,
     ctx: ExecContext,
+    state: &ScopeState,
 ) -> PermissionResult {
     let Some(method) = path.get(1) else {
         return ask("Pyrun command root requires a program".to_string());
@@ -482,7 +448,7 @@ fn analyze_command_call(
         (method.replace('_', "-"), arguments)
     };
 
-    let Some(args) = literal_arguments(arg_nodes, source) else {
+    let Some(args) = resolve_command_arguments(&program, arg_nodes, source, state) else {
         return ask(format!("Pyrun command {} has dynamic arguments", program));
     };
 
@@ -520,10 +486,17 @@ fn analyze_reserved_access(
 fn analyze_assignment(
     node: Node<'_>,
     source: &[u8],
-    state: &mut ShadowState,
+    state: &mut ScopeState,
 ) -> Option<PermissionResult> {
     let target = node.child_by_field_name("left")?;
-    if target.kind() == "identifier" && target.utf8_text(source).ok() == Some("obj") {
+    let Some(name) = identifier_name(target, source) else {
+        return root_name(target, source)
+            .filter(|root| RESERVED_ROOTS.contains(&root.as_str()))
+            .map(|root| ask(format!("Pyrun helper rebinding on {}", root)));
+    };
+
+    state.known_arguments.remove(&name);
+    if name == "obj" {
         if is_safe_obj_shadow_assignment(node, source) {
             state.obj_shadowed = true;
             return None;
@@ -531,12 +504,40 @@ fn analyze_assignment(
         state.obj_shadowed = false;
         return Some(ask("Pyrun helper rebinding on obj".to_string()));
     }
-    if let Some(root) = root_name(target, source)
-        && RESERVED_ROOTS.contains(&root.as_str())
-    {
-        return Some(ask(format!("Pyrun helper rebinding on {}", root)));
+    if RESERVED_ROOTS.contains(&name.as_str()) {
+        return Some(ask(format!("Pyrun helper rebinding on {}", name)));
     }
 
+    if let Some(argument) = known_argument_from_assignment(node, source, state) {
+        state.known_arguments.insert(name, argument);
+    }
+
+    assignment_alias_result(node, source)
+}
+
+fn identifier_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    (node.kind() == "identifier")
+        .then(|| node.utf8_text(source).ok().map(str::to_string))
+        .flatten()
+}
+
+fn known_argument_from_assignment(
+    node: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<KnownArgument> {
+    if node.kind() != "assignment" {
+        return None;
+    }
+    let value = node.child_by_field_name("right")?;
+    if let Some(literal) = literal_string(value, source) {
+        return Some(KnownArgument::Literal(literal));
+    }
+    is_kubernetes_resource_name_expression(value, source, state)
+        .then_some(KnownArgument::KubernetesResourceName)
+}
+
+fn assignment_alias_result(node: Node<'_>, source: &[u8]) -> Option<PermissionResult> {
     let value = node.child_by_field_name("right")?;
     if value.kind() == "call" {
         return None;
@@ -557,6 +558,100 @@ fn is_safe_obj_shadow_assignment(node: Node<'_>, source: &[u8]) -> bool {
     };
     dotted_path(function, source)
         .is_some_and(|path| path == ["json".to_string(), "loads".to_string()])
+}
+
+fn is_command_stdout_strip_call(function: Node<'_>, arguments: &[Node<'_>], source: &[u8]) -> bool {
+    if !arguments.is_empty() {
+        return false;
+    }
+    let Some(call) = function.parent() else {
+        return false;
+    };
+    same_node(call.child_by_field_name("function"), Some(function))
+        && command_stdout_strip_source(call, source).is_some()
+}
+
+fn is_kubernetes_resource_name_expression(
+    value: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> bool {
+    let Some(command_call) = command_stdout_strip_source(value, source) else {
+        return false;
+    };
+    let Some(function) = command_call.child_by_field_name("function") else {
+        return false;
+    };
+    let Some(path) = dotted_path(function, source) else {
+        return false;
+    };
+    if !matches!(path.as_slice(), [root, command] if root == "cli" && command == "kubectl") {
+        return false;
+    }
+
+    let arguments = call_arguments(command_call);
+    let Some(arguments) = resolve_known_arguments(&arguments, source, state) else {
+        return false;
+    };
+    let Some(arguments) = literal_known_arguments(&arguments) else {
+        return false;
+    };
+    is_kubernetes_resource_name_query(&arguments)
+}
+
+fn command_stdout_strip_source<'a>(call: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+    let stdout = zero_argument_method_receiver(call, "strip", source)?;
+    let run_call = attribute_receiver(stdout, "stdout", source)?;
+    let capture_call = zero_argument_method_receiver(run_call, "run", source)?;
+    zero_argument_method_receiver(capture_call, "capture", source)
+}
+
+fn zero_argument_method_receiver<'a>(
+    call: Node<'a>,
+    method: &str,
+    source: &[u8],
+) -> Option<Node<'a>> {
+    if call.kind() != "call" || !call_arguments(call).is_empty() {
+        return None;
+    }
+    let function = call.child_by_field_name("function")?;
+    if attribute_name(function, source).as_deref() != Some(method) {
+        return None;
+    }
+    function.child_by_field_name("object")
+}
+
+fn attribute_receiver<'a>(attribute: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
+    if attribute.kind() != "attribute" || attribute_name(attribute, source).as_deref() != Some(name)
+    {
+        return None;
+    }
+    attribute.child_by_field_name("object")
+}
+
+fn is_kubernetes_resource_name_query(arguments: &[String]) -> bool {
+    let is_get_pods = matches!(
+        (
+            arguments.first().map(String::as_str),
+            arguments.get(1).map(String::as_str)
+        ),
+        (Some("get"), Some("pod" | "pods"))
+    );
+    is_get_pods && requests_kubernetes_name_jsonpath(arguments)
+}
+
+fn requests_kubernetes_name_jsonpath(arguments: &[String]) -> bool {
+    arguments.windows(2).any(|pair| {
+        matches!(pair[0].as_str(), "-o" | "--output") && is_kubernetes_name_jsonpath(&pair[1])
+    }) || arguments.iter().any(|argument| {
+        argument
+            .strip_prefix("--output=")
+            .is_some_and(is_kubernetes_name_jsonpath)
+    })
+}
+
+fn is_kubernetes_name_jsonpath(value: &str) -> bool {
+    value == KUBERNETES_NAME_JSONPATH
 }
 
 fn builder_cwd_after_call(
@@ -635,10 +730,72 @@ fn first_literal_argument(arguments: &[Node<'_>], source: &[u8]) -> Option<Strin
         .and_then(|argument| literal_string(*argument, source))
 }
 
-fn literal_arguments(arguments: &[Node<'_>], source: &[u8]) -> Option<Vec<String>> {
+fn resolve_command_arguments(
+    program: &str,
+    arguments: &[Node<'_>],
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<Vec<String>> {
+    let arguments = resolve_known_arguments(arguments, source, state)?;
+    if let Some(literals) = literal_known_arguments(&arguments) {
+        return Some(literals);
+    }
+    allows_kubernetes_resource_arguments(program, &arguments)
+        .then(|| materialize_known_arguments(arguments))
+}
+
+fn resolve_known_arguments(
+    arguments: &[Node<'_>],
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<Vec<KnownArgument>> {
     arguments
         .iter()
-        .map(|argument| literal_string(*argument, source))
+        .map(|argument| resolve_known_argument(*argument, source, state))
+        .collect()
+}
+
+fn resolve_known_argument(
+    argument: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<KnownArgument> {
+    if let Some(literal) = literal_string(argument, source) {
+        return Some(KnownArgument::Literal(literal));
+    }
+    let name = identifier_name(argument, source)?;
+    state.known_arguments.get(&name).cloned()
+}
+
+fn literal_known_arguments(arguments: &[KnownArgument]) -> Option<Vec<String>> {
+    arguments
+        .iter()
+        .map(|argument| match argument {
+            KnownArgument::Literal(value) => Some(value.clone()),
+            KnownArgument::KubernetesResourceName => None,
+        })
+        .collect()
+}
+
+fn allows_kubernetes_resource_arguments(program: &str, arguments: &[KnownArgument]) -> bool {
+    let command = program.rsplit('/').next().unwrap_or(program);
+    let Some(KnownArgument::Literal(subcommand)) = arguments.first() else {
+        return false;
+    };
+    command == "kubectl"
+        && matches!(subcommand.as_str(), "logs" | "top")
+        && arguments
+            .iter()
+            .any(|argument| matches!(argument, KnownArgument::KubernetesResourceName))
+}
+
+fn materialize_known_arguments(arguments: Vec<KnownArgument>) -> Vec<String> {
+    arguments
+        .into_iter()
+        .map(|argument| match argument {
+            KnownArgument::Literal(value) => value,
+            KnownArgument::KubernetesResourceName => KUBERNETES_RESOURCE_PLACEHOLDER.to_string(),
+        })
         .collect()
 }
 

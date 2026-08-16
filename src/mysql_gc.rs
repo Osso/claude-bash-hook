@@ -3,7 +3,7 @@ use crate::config::{Permission, PermissionResult};
 use crate::sql;
 
 pub fn check_profile(cmd: &Command, piped_query: Option<&str>) -> Option<PermissionResult> {
-    if cmd.name != "mysql-gc" {
+    if cmd.name.rsplit('/').next() != Some("mysql-gc") {
         return None;
     }
 
