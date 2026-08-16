@@ -95,6 +95,7 @@ struct VisitContext<'a> {
 #[derive(Clone, Default)]
 struct ScopeState {
     obj_shadowed: bool,
+    local_text_is_string: bool,
     known_arguments: HashMap<String, KnownArgument>,
     known_argument_lists: HashMap<String, Vec<KnownArgument>>,
 }
@@ -225,6 +226,7 @@ fn literal_argument_list(item: Node<'_>, source: &[u8]) -> Option<Vec<KnownArgum
 
 fn clear_known_state(state: &mut ScopeState) {
     state.obj_shadowed = false;
+    state.local_text_is_string = false;
     state.known_arguments.clear();
     state.known_argument_lists.clear();
 }
@@ -298,8 +300,12 @@ fn analyze_call(
 ) -> Option<PermissionResult> {
     let function = call.child_by_field_name("function")?;
     let arguments = call_arguments(call);
-    if state.obj_shadowed && root_name(function, context.source).as_deref() == Some("obj") {
+    let root = root_name(function, context.source);
+    if state.obj_shadowed && root.as_deref() == Some("obj") {
         return None;
+    }
+    if state.local_text_is_string && root.as_deref() == Some("text") {
+        return analyze_local_text_call(call, context.source, state);
     }
     if let Some(result) = analyze_reserved_access(function, &arguments, context.source) {
         return Some(result);
@@ -326,6 +332,17 @@ fn analyze_call(
         context.execution,
         state,
     )
+}
+
+fn analyze_local_text_call(
+    call: Node<'_>,
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<PermissionResult> {
+    if is_safe_local_text_call(call, source, state) {
+        return None;
+    }
+    Some(ask("unsupported call on local text string".to_string()))
 }
 
 fn analyze_named_call(
@@ -589,6 +606,14 @@ fn analyze_assignment(
         state.obj_shadowed = false;
         return Some(ask("Pyrun helper rebinding on obj".to_string()));
     }
+    if name == "text" {
+        if is_proven_text_assignment(node, source, state) {
+            state.local_text_is_string = true;
+            return None;
+        }
+        state.local_text_is_string = false;
+        return Some(ask("Pyrun helper rebinding on text".to_string()));
+    }
     if RESERVED_ROOTS.contains(&name.as_str()) {
         return Some(ask(format!("Pyrun helper rebinding on {}", name)));
     }
@@ -643,6 +668,65 @@ fn is_safe_obj_shadow_assignment(node: Node<'_>, source: &[u8]) -> bool {
     };
     dotted_path(function, source)
         .is_some_and(|path| path == ["json".to_string(), "loads".to_string()])
+}
+
+fn is_proven_text_assignment(node: Node<'_>, source: &[u8], state: &ScopeState) -> bool {
+    if node.kind() != "assignment" {
+        return false;
+    }
+    node.child_by_field_name("right")
+        .is_some_and(|value| is_proven_string_expression(value, source, state))
+}
+
+fn is_safe_local_text_call(call: Node<'_>, source: &[u8], state: &ScopeState) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let Some(receiver) = function.child_by_field_name("object") else {
+        return false;
+    };
+    if !is_proven_string_expression(receiver, source, state) {
+        return false;
+    }
+    let arguments = call_arguments(call);
+    match attribute_name(function, source).as_deref() {
+        Some("strip") => arguments.is_empty(),
+        Some("endswith") => {
+            matches!(arguments.as_slice(), [argument] if literal_string(*argument, source).is_some())
+        }
+        _ => false,
+    }
+}
+
+fn is_proven_string_expression(node: Node<'_>, source: &[u8], state: &ScopeState) -> bool {
+    if literal_string(node, source).is_some() {
+        return true;
+    }
+    if identifier_name(node, source).as_deref() == Some("text") {
+        return state.local_text_is_string;
+    }
+    is_string_transform_call(node, source, state)
+}
+
+fn is_string_transform_call(call: Node<'_>, source: &[u8], state: &ScopeState) -> bool {
+    if call.kind() != "call" {
+        return false;
+    }
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let Some(receiver) = function.child_by_field_name("object") else {
+        return false;
+    };
+    if !is_proven_string_expression(receiver, source, state) {
+        return false;
+    }
+    let arguments = call_arguments(call);
+    match attribute_name(function, source).as_deref() {
+        Some("join") => arguments.len() == 1,
+        Some("strip") => arguments.is_empty(),
+        _ => false,
+    }
 }
 
 fn is_command_stdout_strip_call(function: Node<'_>, arguments: &[Node<'_>], source: &[u8]) -> bool {

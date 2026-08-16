@@ -400,6 +400,42 @@ print(args, output)
 }
 
 #[test]
+fn test_pyrun_eval_reported_local_text_shadow_allows_read_only_scan() {
+    let code = r#"
+import json
+from pathlib import Path
+roots=[
+Path('/home/osso/.config/pi/agent/detached-jobs/2026-08-15T19-25-34-015Z_01a006e2-fbbf-7ebf-9240-16bc85b4173a'),
+Path('/home/osso/.config/pi/agent/sessions/--syncthing-Sync-Projects-globalcomix-cdc-mysql8--/detached-jobs/2026-08-15T19-25-34-015Z_01a006e2-fbbf-7ebf-9240-16bc85b4173a')]
+for root in roots:
+ if not root.exists(): continue
+ for p in root.rglob('launch.json'):
+  try: obj=json.loads(p.read_text())
+  except: continue
+  args=obj.get('args',[]); text=' '.join(map(str,args))
+  if 'deploy.sh' in text and ('IMAGE_REPO' in text or text.strip().endswith('deploy.sh')):
+   print(p); print(args); print(obj.get('cwd'))
+"#;
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_local_text_shadow_remains_fail_closed() {
+    for code in [
+        "text = build_text()\ntext.strip()",
+        "text = ' '.join(['safe'])\ntext = action\ntext.strip()",
+        "text = ' '.join(['safe'])\ntext.__class__.__subclasses__()",
+        "text = other\ntext.endswith('safe')",
+    ] {
+        let result = pyrun_result(code, &Config::default());
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
 fn test_pyrun_eval_json_loaded_obj_shadow_is_scope_and_order_aware() {
     let safe_then_unsafe = pyrun_result(
         r#"

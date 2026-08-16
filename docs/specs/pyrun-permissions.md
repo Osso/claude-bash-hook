@@ -37,7 +37,8 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 
 - [x] Allow only the tested read-only helper surface for `rg`, `fd`, `text`, `seq`, `obj`, and `hr`.
 - [x] Allow a local `obj` assigned from static `json.loads(...)` to shadow Pyrun's pure `obj` namespace within the same lexical scope and only after that assignment, so ordinary read-only dictionary calls and chained `.get()` calls do not prompt.
-- [x] Restore `Ask` after arbitrary or unsafe reassignment of local `obj`; genuine unshadowed Pyrun `obj.get` remains allowed.
+- [x] Allow local `text` to shadow Pyrun's pure `text` namespace only after assignment from a proven built-in string expression; permit the required literal-separator `join` → zero-argument `strip` → literal `endswith` flow.
+- [x] Restore `Ask` after arbitrary or unsafe reassignment of local `obj` or `text`; unsupported calls on proven local `text` strings, including introspection, also ask. Genuine unshadowed Pyrun helpers remain governed by their helper policy.
 - [x] Ask for network, privileged, bridge, command-adjacent, or otherwise side-effecting helper roots such as `http`, `tools`, `kubectl`, `sqlite`, `pi`, and `tmp`.
 - [x] Ask for dynamic access, reserved-helper rebinding or aliasing, unknown helper methods, and unsupported helper literals, except for the static `json.loads(...)` local-`obj` shadowing rule above.
 - [x] Ask for every statically unknown Pyrun command and filesystem method with dedicated behavioral coverage.
@@ -86,6 +87,8 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_json_loaded_obj_shadow_allows_reported_read_only_shape`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_json_loaded_obj_shadow_is_scope_and_order_aware`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_unshadowed_obj_namespace_stays_allowed`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_local_text_shadow_allows_read_only_scan`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_local_text_shadow_remains_fail_closed`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_static_mysql_query_variable_allows`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_prod_rw_select_variable_allows`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_kubectl_resource_name_flow_allows`
@@ -108,6 +111,6 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
 - Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis; trusted argument bindings are cleared across uncertain control flow.
 - Auto-allowing arbitrary dynamic, escaped, computed, aliased, or f-string command and path values; only documented same-scope static strings (including command program and builder cwd), Kubernetes resource-name provenance, and bounded literal argv loops are exempt.
-- Unknown local rebinding remains fail-closed and restores `Ask`; only documented static string arguments, Kubernetes resource-name provenance, and static `json.loads(...)` local-`obj` shadowing are exempt.
+- Unknown local rebinding remains fail-closed and restores `Ask`; only documented static string arguments, Kubernetes resource-name provenance, static `json.loads(...)` local-`obj` shadowing, and proven built-in-string local-`text` shadowing are exempt.
 - Simulating `host.cd` as execution flow; `host.cd` asks instead.
 - Changes to Pyrun, Pi, command configuration format, or unrelated hook analyzers.
