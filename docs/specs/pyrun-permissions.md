@@ -18,7 +18,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Unroll at most 32 iterations of literal-string argv tuples when a `for` loop uses either an inline literal list/tuple or a first, same-scope, source-ordered assignment of that bounded collection; the loop variable must be the sole direct `*args` command argument, and each expanded command still receives its normal policy decision.
 - [x] Require inline literal or proven same-scope static-string command names. Decode ordinary unprefixed single/double-quoted Python strings before policy, supporting `\\`, escaped quotes, `\\a`, `\\b`, `\\f`, `\\n`, `\\r`, `\\t`, `\\v`, and physical LF/CRLF continuations. Other escape forms and string syntaxes ask.
 - [x] Named argv collections are single-use loop provenance: aliases, reassignment, augmented assignment, other reads/escapes, body references, computed iterables or members, and unsupported literals ask.
-- [x] Resolve a builder `cwd`/`in_` value when it is an inline literal or proven same-scope static string. A single unresolved value discards the builder cwd and evaluates the literal command and arguments under global/no-cwd policy; global Allow/Ask/Deny remains authoritative and cwd-scoped rules cannot match. Malformed calls and statically invalid paths ask.
+- [x] Resolve a builder `cwd`/`in_` value when it is an inline literal or proven same-scope static string. A single unresolved value discards the builder cwd and evaluates literal command arguments under global/no-cwd policy, but recognized relative filesystem write targets ask before a global Allow can apply. Global Ask/Deny remains authoritative and cwd-scoped rules cannot match. Malformed calls and statically invalid paths ask.
 - [x] Classify literal `kubectl wait` as a read-only/watch operation through command policy.
 - [x] Resolve relative command working directories from the Pyrun session context and reanalyze the command under the proven builder cwd.
 - [x] Preserve the distinction between the tool-provided virtual cwd and the hook's initial cwd when resolving command and path policy.
@@ -31,6 +31,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Allow writes and command output under `/tmp` and the resolved project/session cwd when no stricter policy denies them.
 - [x] Honor configured write-allow paths for writes and output, `ask_paths` for reads and all modifying operations, and `ask_write_paths` for modifying operations.
 - [x] Analyze `cli.*.output(...)` as a write to the session cwd; a builder cwd does not change output-path resolution.
+- [x] Ask when unresolved builder cwd leaves a recognized relative write target for `cp`/`mv`-family commands, path-creating and in-place commands, `rm`, `tee`, or `tar`; absolute write targets and resolved builder cwd continue through normal policy.
 - [x] Ask when paths are dynamic, contain parent-directory traversal, use unsupported tilde expansion, cannot be safely resolved, or traverse broken/out-of-tree symlinks.
 - [x] Reuse the existing `touch` policy for filesystem writes and command output, and the existing `rm` policy for filesystem removal.
 
@@ -109,7 +110,9 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_static_variable_cwd_allows`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_variable_in_cwd_allows`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_cwd_after_if_uses_global_git_policy`
-- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_dynamic_cwd_uses_global_allow_policy`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_relative_write_targets_ask`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_absolute_write_targets_use_global_policy`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_resolved_cwd_relative_write_target_uses_global_policy`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_dynamic_cwd_preserves_global_ask`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_cli_dynamic_in_uses_global_allow_policy`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_dynamic_cwd_cannot_satisfy_cwd_scoped_rule`
@@ -128,7 +131,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 
 - Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
 - Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis; trusted argument bindings are cleared across uncertain control flow.
-- Auto-allowing arbitrary dynamic, computed, aliased, or f-string command, argument, filesystem, or output-path values. An unresolved builder cwd is not trusted as a path and cannot satisfy cwd-scoped policy, but it does not override the global decision for an otherwise literal command.
+- Auto-allowing arbitrary dynamic, computed, aliased, or f-string command, argument, filesystem, or output-path values. An unresolved builder cwd is not trusted as a path, cannot satisfy cwd-scoped policy, and cannot auto-allow recognized relative filesystem write targets; other literal commands retain their global/no-cwd decision.
 - Raw, bytes, Unicode-prefixed, f-string, triple-quoted, concatenated, octal, hexadecimal, Unicode, named-Unicode, and unknown escape forms remain unsupported and fail closed.
 - Unknown local rebinding remains fail-closed and restores `Ask`; only documented static string arguments, Kubernetes resource-name provenance, static `json.loads(...)` local-`obj` shadowing, and proven built-in-string local-`text` shadowing are exempt.
 - Simulating `host.cd` as execution flow; `host.cd` asks instead.

@@ -38,6 +38,23 @@ pub fn check_tar(
     }
 }
 
+pub(crate) fn find_relative_write_target(cmd: &Command) -> Option<String> {
+    if cmd.name != "tar" {
+        return None;
+    }
+    match tar_mode(&cmd.args) {
+        TarMode::Extract => match find_target_dir(&cmd.args) {
+            Some(directory) if Path::new(directory).is_relative() => Some(directory.to_string()),
+            None => Some(".".to_string()),
+            _ => None,
+        },
+        TarMode::Other if tar_is_create_like(&cmd.args) => find_archive_file(&cmd.args)
+            .filter(|archive| Path::new(archive).is_relative())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
 /// Ask when tar would write to a protected path: an extraction `-C` directory,
 /// or the `-f` archive in a create/append mode.
 fn ask_if_target_protected(

@@ -97,6 +97,13 @@ struct VisitContext<'a> {
     execution: ExecContext,
 }
 
+#[derive(Clone, Copy)]
+struct CommandCwdContext<'a> {
+    virtual_cwd: Option<&'a str>,
+    initial_cwd: Option<&'a str>,
+    unresolved: bool,
+}
+
 #[derive(Clone, Default)]
 struct ScopeState {
     obj_shadowed: bool,
@@ -408,10 +415,10 @@ fn analyze_named_call(
         return analyze_dynamic_call(function, arguments, source);
     };
     let session_cwd = virtual_cwd.or(initial_cwd);
-    let (command_virtual_cwd, inherits_session_cwd, effective_initial_cwd) =
+    let (command_virtual_cwd, inherits_session_cwd, effective_initial_cwd, has_unresolved_cwd) =
         match resolve_command_virtual_cwd(&path, call, source, session_cwd, state) {
-            Ok(cwd) => (cwd, true, initial_cwd),
-            Err(CommandCwdError::Dynamic) => (None, false, None),
+            Ok(cwd) => (cwd, true, initial_cwd, false),
+            Err(CommandCwdError::Dynamic) => (None, false, None, true),
             Err(CommandCwdError::Invalid(reason)) => return Some(ask(reason)),
         };
     let effective_virtual_cwd = if inherits_session_cwd {
@@ -419,16 +426,12 @@ fn analyze_named_call(
     } else {
         None
     };
-    analyze_static_call(
-        &path,
-        arguments,
-        source,
-        config,
-        effective_virtual_cwd,
-        effective_initial_cwd,
-        ctx,
-        state,
-    )
+    let cwd_context = CommandCwdContext {
+        virtual_cwd: effective_virtual_cwd,
+        initial_cwd: effective_initial_cwd,
+        unresolved: has_unresolved_cwd,
+    };
+    analyze_static_call(&path, arguments, source, config, cwd_context, ctx, state)
 }
 
 fn resolve_command_virtual_cwd(
@@ -503,22 +506,14 @@ fn analyze_static_call(
     arguments: &[Node<'_>],
     source: &[u8],
     config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
+    cwd: CommandCwdContext<'_>,
     ctx: ExecContext,
     state: &ScopeState,
 ) -> Option<PermissionResult> {
     let root = path.first()?.as_str();
     match root {
         root if COMMAND_ROOTS.contains(&root) => Some(analyze_command_call(
-            path,
-            arguments,
-            source,
-            config,
-            virtual_cwd,
-            initial_cwd,
-            ctx,
-            state,
+            path, arguments, source, config, cwd, ctx, state,
         )),
         "host" => Some(analyze_host_call(path)),
         "fs" => Some(path::analyze_filesystem_call(
@@ -526,8 +521,8 @@ fn analyze_static_call(
             arguments,
             source,
             config,
-            virtual_cwd,
-            initial_cwd,
+            cwd.virtual_cwd,
+            cwd.initial_cwd,
             ctx,
         )),
         root if is_pure_helper_root(root) => Some(analyze_pure_helper_call(path)),
@@ -578,8 +573,7 @@ fn analyze_command_call(
     arguments: &[Node<'_>],
     source: &[u8],
     config: &Config,
-    virtual_cwd: Option<&str>,
-    initial_cwd: Option<&str>,
+    cwd: CommandCwdContext<'_>,
     ctx: ExecContext,
     state: &ScopeState,
 ) -> PermissionResult {
@@ -603,8 +597,18 @@ fn analyze_command_call(
         return ask(format!("Pyrun command {} has dynamic arguments", program));
     };
 
-    let result =
-        analysis::analyze_literal_command(&program, &args, config, ctx, virtual_cwd, initial_cwd);
+    let result = if cwd.unresolved {
+        analysis::analyze_literal_command_with_unresolved_cwd(&program, &args, config, ctx)
+    } else {
+        analysis::analyze_literal_command(
+            &program,
+            &args,
+            config,
+            ctx,
+            cwd.virtual_cwd,
+            cwd.initial_cwd,
+        )
+    };
     normalize_command_result(result, &program)
 }
 

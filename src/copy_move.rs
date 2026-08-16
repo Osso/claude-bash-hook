@@ -55,6 +55,12 @@ pub fn check_write_command(
     None
 }
 
+pub(crate) fn find_relative_write_target(cmd: &Command) -> Option<String> {
+    write_targets(cmd)
+        .into_iter()
+        .find(|target| !target.is_empty() && Path::new(target).is_relative())
+}
+
 /// Compression tools that create/replace files in place.
 fn is_compression_command(command: &str) -> bool {
     matches!(

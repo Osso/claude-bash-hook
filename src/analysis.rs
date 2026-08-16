@@ -270,6 +270,45 @@ pub(crate) fn analyze_literal_command(
     allow_in_bypass(result, ctx)
 }
 
+pub(crate) fn analyze_literal_command_with_unresolved_cwd(
+    program: &str,
+    args: &[String],
+    config: &Config,
+    ctx: ExecContext,
+) -> PermissionResult {
+    let policy_result = analyze_literal_command(program, args, config, ctx, None, None);
+    let command = analyzer::Command {
+        name: program.to_string(),
+        args: args.to_vec(),
+    };
+    let Some(target) = find_relative_write_target(&command) else {
+        return policy_result;
+    };
+    let relative_write_result = allow_in_bypass(
+        PermissionResult {
+            permission: Permission::Ask,
+            reason: format!(
+                "unresolved Pyrun cwd cannot resolve relative {} write target {}",
+                command.name, target
+            ),
+            suggestion: None,
+        },
+        ctx,
+    );
+    if relative_write_result.permission > policy_result.permission {
+        relative_write_result
+    } else {
+        policy_result
+    }
+}
+
+fn find_relative_write_target(command: &analyzer::Command) -> Option<String> {
+    copy_move::find_relative_write_target(command)
+        .or_else(|| rm::find_relative_write_target(command))
+        .or_else(|| tee::find_relative_write_target(command))
+        .or_else(|| tar::find_relative_write_target(command))
+}
+
 /// Check a single command, handling wrappers recursively
 fn check_single_command(
     cmd: &analyzer::Command,

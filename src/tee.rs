@@ -21,12 +21,7 @@ pub fn check_tee(
     }
 
     // Extract file arguments (skip flags)
-    let file_args: Vec<&str> = cmd
-        .args
-        .iter()
-        .filter(|a| !a.starts_with('-'))
-        .map(|s| s.as_str())
-        .collect();
+    let file_args: Vec<&str> = file_arguments(cmd).collect();
 
     // No files specified - allow (tee with no args just copies stdin to stdout)
     if file_args.is_empty() {
@@ -62,6 +57,22 @@ pub fn check_tee(
         reason: "tee to /tmp".to_string(),
         suggestion: None,
     })
+}
+
+pub(crate) fn find_relative_write_target(cmd: &Command) -> Option<String> {
+    if cmd.name != "tee" {
+        return None;
+    }
+    file_arguments(cmd)
+        .find(|path| Path::new(path).is_relative())
+        .map(str::to_string)
+}
+
+fn file_arguments(cmd: &Command) -> impl Iterator<Item = &str> {
+    cmd.args
+        .iter()
+        .filter(|argument| !argument.starts_with('-'))
+        .map(String::as_str)
 }
 
 /// Check if a path is safely under /tmp/

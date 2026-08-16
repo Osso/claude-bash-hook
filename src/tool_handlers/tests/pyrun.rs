@@ -136,7 +136,74 @@ fn test_pyrun_eval_cli_literal_cwd_keeps_read_only_command_allowed() {
 }
 
 #[test]
-fn test_pyrun_eval_cli_dynamic_cwd_uses_global_allow_policy() {
+fn test_pyrun_eval_dynamic_cwd_relative_write_targets_ask() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["cp", "mkdir", "sort", "rm", "tee", "tar"]
+        permission = "allow"
+        reason = "globally allowed"
+        "#,
+    )
+    .expect("config");
+    for code in [
+        "cli.cp(\"source\", \"destination\").cwd(directory).run()",
+        "cli.cp(\"source\", \"destination\").in_(directory).run()",
+        "cli.mkdir(\"destination\").cwd(directory).run()",
+        "cli.sort(\"input\", \"-o\", \"output\").cwd(directory).run()",
+        "cli.rm(\"destination\").cwd(directory).run()",
+        "cli.tee(\"destination\").cwd(directory).run()",
+        "cli.tar(\"-cf\", \"archive.tar\", \"source\").cwd(directory).run()",
+        "cli.tar(\"-xf\", \"archive.tar\").cwd(directory).run()",
+    ] {
+        let result = pyrun_result_at(code, &config, "/home/project", ExecContext::default());
+        assert_eq!(
+            result.permission,
+            Permission::Ask,
+            "{code}: {}",
+            result.reason
+        );
+        assert!(
+            result.reason.contains("unresolved Pyrun cwd"),
+            "{code}: {}",
+            result.reason
+        );
+    }
+}
+
+#[test]
+fn test_pyrun_eval_dynamic_cwd_absolute_write_targets_use_global_policy() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["cp", "mkdir", "sort", "rm", "tee", "tar"]
+        permission = "allow"
+        reason = "globally allowed"
+        "#,
+    )
+    .expect("config");
+    for code in [
+        "cli.cp(\"source\", \"/tmp/destination\").cwd(directory).run()",
+        "cli.mkdir(\"/tmp/destination\").cwd(directory).run()",
+        "cli.sort(\"input\", \"-o\", \"/tmp/output\").cwd(directory).run()",
+        "cli.rm(\"/tmp/destination\").cwd(directory).run()",
+        "cli.tee(\"/tmp/destination\").cwd(directory).run()",
+        "cli.tar(\"-cf\", \"/tmp/archive.tar\", \"source\").cwd(directory).run()",
+    ] {
+        let result = pyrun_result_at(code, &config, "/home/project", ExecContext::default());
+        assert_eq!(
+            result.permission,
+            Permission::Allow,
+            "{code}: {}",
+            result.reason
+        );
+    }
+}
+
+#[test]
+fn test_pyrun_eval_resolved_cwd_relative_write_target_uses_global_policy() {
     let config: Config = toml::from_str(
         r#"
         default = "ask"
@@ -148,7 +215,7 @@ fn test_pyrun_eval_cli_dynamic_cwd_uses_global_allow_policy() {
     )
     .expect("config");
     let result = pyrun_result_at(
-        "cli.cp(\"source\", \"destination\").cwd(directory).run()",
+        "cli.cp(\"source\", \"destination\").cwd(\"/tmp\").run()",
         &config,
         "/home/project",
         ExecContext::default(),
@@ -267,19 +334,24 @@ fn test_pyrun_eval_dynamic_cwd_preserves_global_deny() {
         r#"
         default = "ask"
         [[rules]]
-        commands = ["danger"]
+        commands = ["danger", "cp"]
         permission = "deny"
         reason = "globally denied"
         "#,
     )
     .expect("config");
-    let result = pyrun_result_at(
+    for code in [
         "cli.danger().cwd(directory).run()",
-        &config,
-        "/home/project",
-        ExecContext::default(),
-    );
-    assert_eq!(result.permission, Permission::Deny);
+        "cli.cp(\"source\", \"destination\").cwd(directory).run()",
+    ] {
+        let result = pyrun_result_at(code, &config, "/home/project", ExecContext::default());
+        assert_eq!(
+            result.permission,
+            Permission::Deny,
+            "{code}: {}",
+            result.reason
+        );
+    }
 }
 
 #[test]
