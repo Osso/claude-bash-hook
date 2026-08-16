@@ -340,13 +340,14 @@ fn analyze_named_call(
     state: &ScopeState,
 ) -> Option<PermissionResult> {
     let Some(path) = dotted_path(function, source) else {
-        return analyze_dynamic_call(function, arguments, source);
+        return analyze_dynamic_call(function, arguments, source, state);
     };
     let session_cwd = virtual_cwd.or(initial_cwd);
-    let command_virtual_cwd = match resolve_command_virtual_cwd(&path, call, source, session_cwd) {
-        Ok(cwd) => cwd,
-        Err(reason) => return Some(ask(reason)),
-    };
+    let command_virtual_cwd =
+        match resolve_command_virtual_cwd(&path, call, source, session_cwd, state) {
+            Ok(cwd) => cwd,
+            Err(reason) => return Some(ask(reason)),
+        };
     let effective_virtual_cwd = command_virtual_cwd.as_deref().or(virtual_cwd);
     analyze_static_call(
         &path,
@@ -365,12 +366,13 @@ fn resolve_command_virtual_cwd(
     call: Node<'_>,
     source: &[u8],
     session_cwd: Option<&str>,
+    state: &ScopeState,
 ) -> Result<Option<String>, String> {
     let is_command = path
         .first()
         .is_some_and(|root| COMMAND_ROOTS.contains(&root.as_str()));
     if is_command {
-        builder_cwd_after_call(call, source, session_cwd)
+        builder_cwd_after_call(call, source, session_cwd, state)
     } else {
         Ok(None)
     }
@@ -406,6 +408,7 @@ fn analyze_dynamic_call(
     function: Node<'_>,
     arguments: &[Node<'_>],
     source: &[u8],
+    state: &ScopeState,
 ) -> Option<PermissionResult> {
     if is_command_stdout_strip_call(function, arguments, source) {
         return None;
@@ -415,7 +418,7 @@ fn analyze_dynamic_call(
         && COMMAND_ROOTS.contains(&root.as_str())
     {
         if BUILDER_CWD_METHODS.contains(&method.as_str()) {
-            if first_literal_argument(arguments, source).is_some() {
+            if first_static_string_argument(arguments, source, state).is_some() {
                 return None;
             }
             return Some(ask(format!("dynamic Pyrun command {} is not safe", method)));
@@ -521,7 +524,7 @@ fn analyze_command_call(
     let (program, arg_nodes) = if method == "command" || method == "cmd" {
         let Some(program) = arguments
             .first()
-            .and_then(|argument| resolve_command_program(*argument, source, state))
+            .and_then(|argument| resolve_static_string(*argument, source, state))
         else {
             return ask("Pyrun command name is dynamic".to_string());
         };
@@ -740,6 +743,7 @@ fn builder_cwd_after_call(
     call: Node<'_>,
     source: &[u8],
     session_cwd: Option<&str>,
+    state: &ScopeState,
 ) -> Result<Option<String>, String> {
     let mut current = call;
     let mut cwd = None;
@@ -770,6 +774,7 @@ fn builder_cwd_after_call(
                 &method,
                 source,
                 session_cwd,
+                state,
             )?);
         }
         current = builder_call;
@@ -782,8 +787,9 @@ fn builder_cwd_argument(
     method: &str,
     source: &[u8],
     session_cwd: Option<&str>,
+    state: &ScopeState,
 ) -> Result<String, String> {
-    let path = first_literal_argument(&call_arguments(call), source)
+    let path = first_static_string_argument(&call_arguments(call), source, state)
         .ok_or_else(|| format!("dynamic Pyrun command {} is not safe", method))?;
     path::resolve_path(&path, session_cwd, None)
         .ok_or_else(|| format!("Pyrun command {} cwd cannot be resolved", method))
@@ -810,6 +816,17 @@ fn first_literal_argument(arguments: &[Node<'_>], source: &[u8]) -> Option<Strin
     arguments
         .first()
         .and_then(|argument| literal_string(*argument, source))
+}
+
+fn first_static_string_argument(
+    arguments: &[Node<'_>],
+    source: &[u8],
+    state: &ScopeState,
+) -> Option<String> {
+    let [argument] = arguments else {
+        return None;
+    };
+    resolve_static_string(*argument, source, state)
 }
 
 fn resolve_command_arguments(
@@ -851,11 +868,7 @@ fn resolve_known_argument_splat(
     state.known_argument_lists.get(&name).cloned()
 }
 
-fn resolve_command_program(
-    argument: Node<'_>,
-    source: &[u8],
-    state: &ScopeState,
-) -> Option<String> {
+fn resolve_static_string(argument: Node<'_>, source: &[u8], state: &ScopeState) -> Option<String> {
     match resolve_known_argument(argument, source, state)? {
         KnownArgument::Literal(program) => Some(program),
         KnownArgument::KubernetesResourceName => None,

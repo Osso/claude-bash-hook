@@ -147,6 +147,43 @@ fn test_pyrun_eval_cli_dynamic_cwd_asks() {
 }
 
 #[test]
+fn test_pyrun_eval_reported_static_variable_cwd_allows() {
+    let code = "repo='/syncthing/Sync/Projects/globalcomix/cdc-mysql8'\nr=cli.cargo('test','--locked','child_run_id_bounds_the_failed_resync_table_without_losing_determinism').cwd(repo).capture().run()\nprint('exit',r.exit_code)\nprint(r.stdout[-12000:])\nprint(r.stderr[-12000:])";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
+fn test_pyrun_eval_reassigned_static_variable_cwd_asks() {
+    let code = "repo='/tmp/project'\nrepo=choose_repo()\ncli.git('diff').cwd(repo).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_static_variable_cwd_alias_asks() {
+    let code = "repo='/tmp/project'\nalias=repo\ncli.git('diff').cwd(alias).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_static_variable_in_cwd_allows() {
+    let code =
+        "repo='/syncthing/Sync/Projects/claude/claude-bash-hook'\ncli.git('diff').in_(repo).run()";
+
+    let result = pyrun_result(code, &Config::default());
+
+    assert_eq!(result.permission, Permission::Allow, "{}", result.reason);
+}
+
+#[test]
 fn test_pyrun_eval_cli_dynamic_in_cwd_asks() {
     let result = pyrun_result_at(
         "cli.rm(\"passwd\").in_(directory).run()",

@@ -16,9 +16,10 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Resolve same-scope, source-ordered local string assignments when used directly as a command program or argument; later, augmented, conditional, or unknown reassignment invalidates the value.
 - [x] Allow a Kubernetes resource name only when it comes from the exact read-only `kubectl get pod(s) -o jsonpath={.items[0].metadata.name}` captured-stdout `.strip()` flow, and only as an argument to `kubectl logs` or `kubectl top`.
 - [x] Unroll at most 32 iterations of a literal list/tuple containing literal-string argv tuples when a `for` loop variable is used as the sole direct `*args` command argument; each expanded command still receives its normal policy decision.
-- [x] Require inline literal or proven same-scope static-string command names. Other dynamic programs, arguments, attributes, iterables, tuple members, splats, builder `cwd`/`in_` values, and unsupported literals ask.
+- [x] Require inline literal or proven same-scope static-string command names. Other dynamic programs, arguments, attributes, iterables, tuple members, splats, and unsupported literals ask.
+- [x] Resolve a builder `cwd`/`in_` value only when it is inline literal or a proven same-scope static string; aliases, reassignment, multiple arguments, and unresolved paths ask.
 - [x] Classify literal `kubectl wait` as a read-only/watch operation through command policy.
-- [x] Resolve relative command working directories from the Pyrun session context and reanalyze the command under a literal builder cwd.
+- [x] Resolve relative command working directories from the Pyrun session context and reanalyze the command under the proven builder cwd.
 - [x] Preserve the distinction between the tool-provided virtual cwd and the hook's initial cwd when resolving command and path policy.
 - [x] Apply aggregation ordering `deny > ask > allow` with a behavioral test covering a deny and ask in the same program.
 
@@ -93,6 +94,8 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_literal_loop_splat_preserves_command_policy`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_static_command_name_with_loop_splat_allows`
 - `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_command_name_preserves_command_policy`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_reported_static_variable_cwd_allows`
+- `src/tool_handlers/tests/pyrun.rs::test_pyrun_eval_static_variable_in_cwd_allows`
 - Remaining `test_pyrun_eval_*` cases in `src/tool_handlers/tests/pyrun.rs` cover dynamic access, reassignment, aliases, unsupported literals and splats, path normalization, symlinks, and pure-helper allowlists.
 
 ## Known gaps (current cycle)
@@ -104,7 +107,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 
 - Nested Pi/Pyrun approval or continuation protocols for individual helper calls.
 - Full semantic proof of arbitrary Python behavior, including full Python lexical, control-flow, and name-resolution analysis; trusted argument bindings are cleared across uncertain control flow.
-- Auto-allowing arbitrary dynamic, escaped, computed, aliased, or f-string command and path values; only documented same-scope static strings, Kubernetes resource-name provenance, and bounded literal argv loops are exempt.
+- Auto-allowing arbitrary dynamic, escaped, computed, aliased, or f-string command and path values; only documented same-scope static strings (including command program and builder cwd), Kubernetes resource-name provenance, and bounded literal argv loops are exempt.
 - Unknown local rebinding remains fail-closed and restores `Ask`; only documented static string arguments, Kubernetes resource-name provenance, and static `json.loads(...)` local-`obj` shadowing are exempt.
 - Simulating `host.cd` as execution flow; `host.cd` asks instead.
 - Changes to Pyrun, Pi, command configuration format, or unrelated hook analyzers.
