@@ -24,6 +24,7 @@ const BUILDER_CWD_METHODS: &[&str] = &["cwd", "in_"];
 /// Placeholder target for `tmp.file`/`tmp.dir`, which create under the system
 /// temporary directory (`/tmp` when `TMPDIR` is unset).
 const TMP_HANDLE_PATH: &str = "/tmp/pyrun-tmp-handle";
+const TMP_HANDLE_CONSTRUCTORS: &[&str] = &["file", "dir"];
 const KUBERNETES_NAME_JSONPATH: &str = "jsonpath={.items[0].metadata.name}";
 const KUBERNETES_RESOURCE_PLACEHOLDER: &str = "pyrun-kubernetes-resource";
 const MAX_STATIC_LOOP_ITERATIONS: usize = 32;
@@ -556,15 +557,20 @@ fn analyze_write_helper_call(
     cwd: CommandCwdContext<'_>,
     ctx: ExecContext,
 ) -> Option<PermissionResult> {
-    let target = match path.join(".").as_str() {
-        "tools.file.replace" => first_literal_argument(arguments, source),
-        "tools.file.patch" if arguments.len() == 2 => first_literal_argument(arguments, source),
-        "tools.file.patch" => {
+    let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+    let target = match segments.as_slice() {
+        ["tools", "file", "replace"] => first_literal_argument(arguments, source),
+        ["tools", "file", "patch"] if arguments.len() == 2 => {
+            first_literal_argument(arguments, source)
+        }
+        ["tools", "file", "patch"] => {
             return Some(ask(
                 "Pyrun tools.file.patch with an embedded target path requires approval".to_string(),
             ));
         }
-        "tmp.file" | "tmp.dir" => Some(TMP_HANDLE_PATH.to_string()),
+        ["tmp", method] if TMP_HANDLE_CONSTRUCTORS.contains(method) => {
+            Some(TMP_HANDLE_PATH.to_string())
+        }
         _ => return None,
     };
     Some(path::analyze_write_path(
@@ -579,14 +585,16 @@ fn analyze_write_helper_call(
 /// `tmp.file(...).write(...)`-style chains act on the handle's own `/tmp`
 /// path; the inner `tmp.file`/`tmp.dir` call already received the decision.
 fn is_tmp_handle_method(function: Node<'_>, source: &[u8]) -> bool {
-    function
+    let receiver_call = function
         .child_by_field_name("object")
-        .filter(|object| object.kind() == "call")
-        .and_then(|object| object.child_by_field_name("function"))
-        .and_then(|inner| dotted_path(inner, source))
-        .is_some_and(|inner| {
-            matches!(inner.as_slice(), [root, method] if root == "tmp" && (method == "file" || method == "dir"))
-        })
+        .filter(|object| object.kind() == "call");
+    let constructor_path = receiver_call
+        .and_then(|call| call.child_by_field_name("function"))
+        .and_then(|callee| dotted_path(callee, source));
+    let Some([root, method]) = constructor_path.as_deref() else {
+        return false;
+    };
+    root == "tmp" && TMP_HANDLE_CONSTRUCTORS.contains(&method.as_str())
 }
 
 fn analyze_host_call(path: &[String]) -> PermissionResult {
