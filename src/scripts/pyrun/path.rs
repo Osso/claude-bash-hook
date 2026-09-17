@@ -38,7 +38,7 @@ pub(super) fn analyze_filesystem_call(
     }
 }
 
-fn analyze_write_path(
+pub(super) fn analyze_write_path(
     path: Option<String>,
     config: &Config,
     virtual_cwd: Option<&str>,

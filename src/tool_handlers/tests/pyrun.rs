@@ -1217,3 +1217,124 @@ fn test_pyrun_eval_deny_wins_over_ask() {
     );
     assert_eq!(result.permission, Permission::Deny);
 }
+
+fn edit_mode() -> ExecContext {
+    ExecContext {
+        edit_mode: true,
+        ..ExecContext::default()
+    }
+}
+
+/// Mirrors the deployed `touch` rule: file creation asks outside edit mode.
+fn touch_edit_mode_config() -> Config {
+    toml::from_str(
+        r#"
+        [[rules]]
+        commands = ["touch"]
+        permission = "ask"
+        edit_mode_permission = "allow"
+        reason = "create files"
+        "#,
+    )
+    .expect("config")
+}
+
+#[test]
+fn test_pyrun_eval_tools_file_replace_in_cwd_follows_write_policy() {
+    let code = "tools.file.replace(\"notes.txt\", \"a\", \"b\")";
+    let asked = pyrun_result_at(
+        code,
+        &touch_edit_mode_config(),
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(asked.permission, Permission::Ask);
+    let allowed = pyrun_result_at(code, &Config::default(), "/home/project", edit_mode());
+    assert_eq!(allowed.permission, Permission::Allow);
+}
+
+#[test]
+fn test_pyrun_eval_tools_file_replace_outside_cwd_asks_in_edit_mode() {
+    let result = pyrun_result_at(
+        "tools.file.replace(\"/home/other/notes.txt\", \"a\", \"b\")",
+        &Config::default(),
+        "/home/project",
+        edit_mode(),
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_tools_file_replace_dynamic_path_asks_in_edit_mode() {
+    let result = pyrun_result_at(
+        "p = \"notes.txt\"\ntools.file.replace(p, \"a\", \"b\")",
+        &Config::default(),
+        "/home/project",
+        edit_mode(),
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_tools_file_patch_with_explicit_path_follows_write_policy() {
+    let code = "tools.file.patch(\"notes.txt\", \"@@ -1 +1 @@\\n-a\\n+b\")";
+    let asked = pyrun_result_at(
+        code,
+        &touch_edit_mode_config(),
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(asked.permission, Permission::Ask);
+    let allowed = pyrun_result_at(code, &Config::default(), "/home/project", edit_mode());
+    assert_eq!(allowed.permission, Permission::Allow);
+}
+
+#[test]
+fn test_pyrun_eval_tools_file_patch_with_embedded_path_asks_in_edit_mode() {
+    let result = pyrun_result_at(
+        "tools.file.patch(\"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1 +1 @@\\n-a\\n+b\")",
+        &Config::default(),
+        "/home/project",
+        edit_mode(),
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_pyrun_eval_tmp_handles_follow_tmp_write_policy() {
+    for code in [
+        "tmp.file().write(\"x\")",
+        "tmp.file(\"report\", \".json\").write_json({\"a\": 1})",
+        "tmp.dir(\"work\")",
+    ] {
+        let asked = pyrun_result_at(
+            code,
+            &touch_edit_mode_config(),
+            "/home/project",
+            ExecContext::default(),
+        );
+        assert_eq!(asked.permission, Permission::Ask, "{code}");
+        let allowed = pyrun_result_at(code, &Config::default(), "/home/project", edit_mode());
+        assert_eq!(allowed.permission, Permission::Allow, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_tmp_handle_methods_do_not_bypass_touch_deny() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["touch"]
+        permission = "deny"
+        "#,
+    )
+    .expect("config");
+    let result = pyrun_result_at(
+        "tmp.file().write(\"x\")",
+        &config,
+        "/home/project",
+        edit_mode(),
+    );
+    assert_eq!(result.permission, Permission::Deny);
+}

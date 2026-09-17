@@ -21,6 +21,9 @@ const RESERVED_ROOTS: &[&str] = &[
     "text", "seq", "obj", "hr",
 ];
 const BUILDER_CWD_METHODS: &[&str] = &["cwd", "in_"];
+/// Placeholder target for `tmp.file`/`tmp.dir`, which create under the system
+/// temporary directory (`/tmp` when `TMPDIR` is unset).
+const TMP_HANDLE_PATH: &str = "/tmp/pyrun-tmp-handle";
 const KUBERNETES_NAME_JSONPATH: &str = "jsonpath={.items[0].metadata.name}";
 const KUBERNETES_RESOURCE_PLACEHOLDER: &str = "pyrun-kubernetes-resource";
 const MAX_STATIC_LOOP_ITERATIONS: usize = 32;
@@ -486,6 +489,9 @@ fn analyze_dynamic_call(
         return None;
     }
     let root = root_name(function, source)?;
+    if root == "tmp" && is_tmp_handle_method(function, source) {
+        return None;
+    }
     if let Some(method) = attribute_name(function, source)
         && COMMAND_ROOTS.contains(&root.as_str())
     {
@@ -526,6 +532,11 @@ fn analyze_static_call(
             ctx,
         )),
         root if is_pure_helper_root(root) => Some(analyze_pure_helper_call(path)),
+        "tools" | "tmp" => Some(
+            analyze_write_helper_call(path, arguments, source, config, cwd, ctx).unwrap_or_else(
+                || ask(format!("Pyrun helper {} requires approval", path.join("."))),
+            ),
+        ),
         root if RESERVED_ROOTS.contains(&root) => Some(ask(format!(
             "Pyrun helper {} requires approval",
             path.join(".")
@@ -533,6 +544,49 @@ fn analyze_static_call(
         _ if path.len() == 1 && BUILDER_METHODS.contains(&path[0].as_str()) => None,
         _ => None,
     }
+}
+
+/// File-editing helpers follow the same write-path policy as `fs.write`, so
+/// edit mode allows them for targets under the session cwd or `/tmp`.
+fn analyze_write_helper_call(
+    path: &[String],
+    arguments: &[Node<'_>],
+    source: &[u8],
+    config: &Config,
+    cwd: CommandCwdContext<'_>,
+    ctx: ExecContext,
+) -> Option<PermissionResult> {
+    let target = match path.join(".").as_str() {
+        "tools.file.replace" => first_literal_argument(arguments, source),
+        "tools.file.patch" if arguments.len() == 2 => first_literal_argument(arguments, source),
+        "tools.file.patch" => {
+            return Some(ask(
+                "Pyrun tools.file.patch with an embedded target path requires approval".to_string(),
+            ));
+        }
+        "tmp.file" | "tmp.dir" => Some(TMP_HANDLE_PATH.to_string()),
+        _ => return None,
+    };
+    Some(path::analyze_write_path(
+        target,
+        config,
+        cwd.virtual_cwd,
+        cwd.initial_cwd,
+        ctx,
+    ))
+}
+
+/// `tmp.file(...).write(...)`-style chains act on the handle's own `/tmp`
+/// path; the inner `tmp.file`/`tmp.dir` call already received the decision.
+fn is_tmp_handle_method(function: Node<'_>, source: &[u8]) -> bool {
+    function
+        .child_by_field_name("object")
+        .filter(|object| object.kind() == "call")
+        .and_then(|object| object.child_by_field_name("function"))
+        .and_then(|inner| dotted_path(inner, source))
+        .is_some_and(|inner| {
+            matches!(inner.as_slice(), [root, method] if root == "tmp" && (method == "file" || method == "dir"))
+        })
 }
 
 fn analyze_host_call(path: &[String]) -> PermissionResult {

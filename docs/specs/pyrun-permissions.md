@@ -34,6 +34,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Ask when unresolved builder cwd leaves a recognized relative write target for `cp`/`mv`-family commands, path-creating and in-place commands, `rm`, `tee`, or `tar`; absolute write targets and resolved builder cwd continue through normal policy.
 - [x] Ask when paths are dynamic, contain parent-directory traversal, use unsupported tilde expansion, cannot be safely resolved, or traverse broken/out-of-tree symlinks.
 - [x] Reuse the existing `touch` policy for filesystem writes and command output, and the existing `rm` policy for filesystem removal.
+- [x] Analyze `tools.file.replace(path, ...)`, two-argument `tools.file.patch(path, patch)`, and `tmp.file`/`tmp.dir` (as `/tmp` targets, including chained handle methods) with the same write-path policy as `fs.write`, so edit mode allows in-cwd and `/tmp` targets. Single-argument `tools.file.patch` with an embedded target path asks.
 
 ### Helpers and fail-closed behavior
 
@@ -41,7 +42,7 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Allow a local `obj` assigned from static `json.loads(...)` to shadow Pyrun's pure `obj` namespace within the same lexical scope and only after that assignment, so ordinary read-only dictionary calls and chained `.get()` calls do not prompt.
 - [x] Allow local `text` to shadow Pyrun's pure `text` namespace only after assignment from a proven built-in string expression; permit the required literal-separator `join` → zero-argument `strip` → literal `endswith` flow.
 - [x] Restore `Ask` after arbitrary or unsafe reassignment of local `obj` or `text`; unsupported calls on proven local `text` strings, including introspection, also ask. Genuine unshadowed Pyrun helpers remain governed by their helper policy.
-- [x] Ask for network, privileged, bridge, command-adjacent, or otherwise side-effecting helper roots such as `http`, `tools`, `kubectl`, `sqlite`, `pi`, and `tmp`.
+- [x] Ask for network, privileged, bridge, command-adjacent, or otherwise side-effecting helper roots such as `http`, `tools`, `kubectl`, `sqlite`, `pi`, and `tmp`, except the file-editing helpers covered by the write-path rule above.
 - [x] Ask for dynamic access, reserved-helper rebinding or aliasing, unknown helper methods, and unsupported helper literals, except for the static `json.loads(...)` local-`obj` shadowing rule above.
 - [x] Ask for every statically unknown Pyrun command and filesystem method with dedicated behavioral coverage.
 
