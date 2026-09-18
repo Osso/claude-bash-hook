@@ -1254,25 +1254,100 @@ fn test_pyrun_eval_tools_file_replace_in_cwd_follows_write_policy() {
 }
 
 #[test]
-fn test_pyrun_eval_tools_file_replace_outside_cwd_asks_in_edit_mode() {
+fn test_pyrun_eval_tools_file_replace_outside_cwd_allows_in_edit_mode() {
     let result = pyrun_result_at(
         "tools.file.replace(\"/home/other/notes.txt\", \"a\", \"b\")",
         &Config::default(),
         "/home/project",
         edit_mode(),
     );
-    assert_eq!(result.permission, Permission::Ask);
+    assert_eq!(result.permission, Permission::Allow);
 }
 
 #[test]
-fn test_pyrun_eval_tools_file_replace_dynamic_path_asks_in_edit_mode() {
+fn test_pyrun_eval_tools_file_replace_dynamic_path_allows_in_edit_mode() {
+    let code = "p = \"notes.txt\"\ntools.file.replace(p, \"a\", \"b\")";
+    let asked = pyrun_result_at(
+        code,
+        &Config::default(),
+        "/home/project",
+        ExecContext::default(),
+    );
+    assert_eq!(asked.permission, Permission::Ask);
+    let allowed = pyrun_result_at(code, &Config::default(), "/home/project", edit_mode());
+    assert_eq!(allowed.permission, Permission::Allow);
+}
+
+#[test]
+fn test_pyrun_eval_dynamic_write_paths_allow_in_edit_mode() {
+    for code in [
+        "p = compute()\nfs.write(p, \"x\")",
+        "fs.write(f\"{host.cwd()}/out.txt\", \"x\")",
+        "fs.write_json(target, {\"a\": 1})",
+        "cli.git(\"diff\").output(target).run()",
+        "fs.write(\"~/notes.txt\", \"x\")",
+    ] {
+        let asked = pyrun_result_at(
+            code,
+            &Config::default(),
+            "/home/project",
+            ExecContext::default(),
+        );
+        assert_eq!(asked.permission, Permission::Ask, "{code}");
+        let allowed = pyrun_result_at(code, &Config::default(), "/home/project", edit_mode());
+        assert_eq!(allowed.permission, Permission::Allow, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_edit_mode_write_outside_cwd_allows() {
     let result = pyrun_result_at(
-        "p = \"notes.txt\"\ntools.file.replace(p, \"a\", \"b\")",
+        "fs.write(\"/home/other/notes.txt\", \"x\")",
         &Config::default(),
         "/home/project",
         edit_mode(),
     );
-    assert_eq!(result.permission, Permission::Ask);
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_pyrun_eval_edit_mode_keeps_protected_literal_write_paths() {
+    let config: Config = toml::from_str(
+        r#"
+        ask_paths = ["/etc/*"]
+        ask_write_paths = ["/usr/*"]
+        "#,
+    )
+    .expect("config");
+    for code in [
+        "fs.write(\"/etc/hosts\", \"x\")",
+        "fs.write(\"/usr/share/app.conf\", \"x\")",
+        "cli.git(\"diff\").output(\"/etc/report.txt\").run()",
+        "tools.file.replace(\"/etc/hosts\", \"a\", \"b\")",
+    ] {
+        let result = pyrun_result_at(code, &config, "/home/project", edit_mode());
+        assert_eq!(result.permission, Permission::Ask, "{code}");
+    }
+}
+
+#[test]
+fn test_pyrun_eval_edit_mode_write_still_honors_deny_rules() {
+    let config: Config = toml::from_str(
+        r#"
+        default = "ask"
+        [[rules]]
+        commands = ["touch"]
+        permission = "deny"
+        "#,
+    )
+    .expect("config");
+    let result = pyrun_result_at(
+        "fs.write(\"notes.txt\", \"x\")",
+        &config,
+        "/home/project",
+        edit_mode(),
+    );
+    assert_eq!(result.permission, Permission::Deny);
 }
 
 #[test]

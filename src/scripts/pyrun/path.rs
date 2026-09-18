@@ -46,24 +46,30 @@ pub(super) fn analyze_write_path(
     ctx: ExecContext,
 ) -> PermissionResult {
     let Some(path) = path else {
-        return ask("Pyrun filesystem write path is dynamic".to_string());
+        return unresolved_write(ctx, "Pyrun filesystem write path is dynamic".to_string());
     };
     if has_unsupported_tilde(&path) {
-        return ask(format!(
-            "Pyrun filesystem write path cannot resolve tilde expansion: {}",
-            path
-        ));
+        return unresolved_write(
+            ctx,
+            format!(
+                "Pyrun filesystem write path cannot resolve tilde expansion: {}",
+                path
+            ),
+        );
     }
     if resolve_path(&path, virtual_cwd, initial_cwd).is_none() {
-        return ask(format!(
-            "Pyrun filesystem write path cannot resolve safely: {}",
-            path
-        ));
+        return unresolved_write(
+            ctx,
+            format!(
+                "Pyrun filesystem write path cannot resolve safely: {}",
+                path
+            ),
+        );
     }
     if let Some(result) = analyze_touch_target(&path, config, virtual_cwd, initial_cwd, ctx) {
         return result;
     }
-    if is_allowed_write_path(&path, config, virtual_cwd, initial_cwd) {
+    if ctx.edit_mode || is_allowed_write_path(&path, config, virtual_cwd, initial_cwd) {
         return allow(format!("Pyrun filesystem write allowed for {}", path));
     }
     ask(format!(
@@ -139,30 +145,43 @@ pub(super) fn analyze_output_path(
     ctx: ExecContext,
 ) -> PermissionResult {
     let Some(path) = path else {
-        return ask("Pyrun command output path is dynamic".to_string());
+        return unresolved_write(ctx, "Pyrun command output path is dynamic".to_string());
     };
     if has_unsupported_tilde(&path) {
-        return ask(format!(
-            "Pyrun command output path cannot resolve tilde expansion: {}",
-            path
-        ));
+        return unresolved_write(
+            ctx,
+            format!(
+                "Pyrun command output path cannot resolve tilde expansion: {}",
+                path
+            ),
+        );
     }
     if resolve_path(&path, virtual_cwd, initial_cwd).is_none() {
-        return ask(format!(
-            "Pyrun command output path cannot resolve safely: {}",
-            path
-        ));
+        return unresolved_write(
+            ctx,
+            format!("Pyrun command output path cannot resolve safely: {}", path),
+        );
     }
     if let Some(result) = analyze_touch_target(&path, config, virtual_cwd, initial_cwd, ctx) {
         return result;
     }
-    if is_allowed_write_path(&path, config, virtual_cwd, initial_cwd) {
+    if ctx.edit_mode || is_allowed_write_path(&path, config, virtual_cwd, initial_cwd) {
         return allow(format!("Pyrun command output allowed for {}", path));
     }
     ask(format!(
         "Pyrun command output requires approval for {}",
         path
     ))
+}
+
+/// Edit mode approves writes the way the Write and Edit tools do. A target
+/// that never resolves to a literal path cannot be matched against configured
+/// path rules, so edit mode is the only signal left.
+fn unresolved_write(ctx: ExecContext, ask_reason: String) -> PermissionResult {
+    if ctx.edit_mode {
+        return allow("Pyrun write allowed in edit mode".to_string());
+    }
+    ask(ask_reason)
 }
 
 fn analyze_touch_target(

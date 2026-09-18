@@ -29,10 +29,11 @@ Pyrun permission analysis defines the PreToolUse decision for a complete `pyrun_
 - [x] Allow safe literal filesystem reads unless the resolved path is protected by `ask_paths`.
 - [x] Treat filesystem writes and removals as modifying operations subject to existing path and command policy.
 - [x] Allow writes and command output under `/tmp` and the resolved project/session cwd when no stricter policy denies them.
+- [x] Allow writes and command output at any target in edit mode, including dynamic, tilde, and otherwise unresolvable paths; configured `ask_paths`, `ask_write_paths`, and command rules still apply wherever the target resolves to a literal path.
 - [x] Honor configured write-allow paths for writes and output, `ask_paths` for reads and all modifying operations, and `ask_write_paths` for modifying operations.
 - [x] Analyze `cli.*.output(...)` as a write to the session cwd; a builder cwd does not change output-path resolution.
 - [x] Ask when unresolved builder cwd leaves a recognized relative write target for `cp`/`mv`-family commands, path-creating and in-place commands, `rm`, `tee`, or `tar`; absolute write targets and resolved builder cwd continue through normal policy.
-- [x] Ask when paths are dynamic, contain parent-directory traversal, use unsupported tilde expansion, cannot be safely resolved, or traverse broken/out-of-tree symlinks.
+- [x] Ask outside edit mode when paths are dynamic, contain parent-directory traversal, use unsupported tilde expansion, cannot be safely resolved, or traverse broken/out-of-tree symlinks. Reads and removals ask in every mode.
 - [x] Reuse the existing `touch` policy for filesystem writes and command output, and the existing `rm` policy for filesystem removal.
 - [x] Analyze `tools.file.replace(path, ...)`, two-argument `tools.file.patch(path, patch)`, and `tmp.file`/`tmp.dir` (as `/tmp` targets, including chained handle methods) with the same write-path policy as `fs.write`, so edit mode allows in-cwd and `/tmp` targets. Single-argument `tools.file.patch` with an embedded target path asks.
 
