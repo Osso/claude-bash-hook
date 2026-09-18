@@ -45,37 +45,63 @@ pub(super) fn analyze_write_path(
     initial_cwd: Option<&str>,
     ctx: ExecContext,
 ) -> PermissionResult {
-    let Some(path) = path else {
-        return unresolved_write(ctx, "Pyrun filesystem write path is dynamic".to_string());
+    analyze_modifying_path(
+        path,
+        "filesystem write",
+        config,
+        virtual_cwd,
+        initial_cwd,
+        ctx,
+    )
+}
+
+/// Shared policy for targets that create or overwrite a file: `fs` writers,
+/// file-editing helpers, and `cli.*.output(...)`.
+fn analyze_modifying_path(
+    path: Option<String>,
+    label: &str,
+    config: &Config,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+    ctx: ExecContext,
+) -> PermissionResult {
+    let path = match resolvable_target(path, label, virtual_cwd, initial_cwd) {
+        Ok(path) => path,
+        Err(ask_reason) => return unresolved_write(ctx, ask_reason),
     };
-    if has_unsupported_tilde(&path) {
-        return unresolved_write(
-            ctx,
-            format!(
-                "Pyrun filesystem write path cannot resolve tilde expansion: {}",
-                path
-            ),
-        );
-    }
-    if resolve_path(&path, virtual_cwd, initial_cwd).is_none() {
-        return unresolved_write(
-            ctx,
-            format!(
-                "Pyrun filesystem write path cannot resolve safely: {}",
-                path
-            ),
-        );
-    }
     if let Some(result) = analyze_touch_target(&path, config, virtual_cwd, initial_cwd, ctx) {
         return result;
     }
     if ctx.edit_mode || is_allowed_write_path(&path, config, virtual_cwd, initial_cwd) {
-        return allow(format!("Pyrun filesystem write allowed for {}", path));
+        return allow(format!("Pyrun {} allowed for {}", label, path));
     }
-    ask(format!(
-        "Pyrun filesystem write requires approval for {}",
-        path
-    ))
+    ask(format!("Pyrun {} requires approval for {}", label, path))
+}
+
+/// Return the literal target, or the reason it cannot be matched against
+/// configured path rules.
+fn resolvable_target(
+    path: Option<String>,
+    label: &str,
+    virtual_cwd: Option<&str>,
+    initial_cwd: Option<&str>,
+) -> Result<String, String> {
+    let Some(path) = path else {
+        return Err(format!("Pyrun {} path is dynamic", label));
+    };
+    if has_unsupported_tilde(&path) {
+        return Err(format!(
+            "Pyrun {} path cannot resolve tilde expansion: {}",
+            label, path
+        ));
+    }
+    if resolve_path(&path, virtual_cwd, initial_cwd).is_none() {
+        return Err(format!(
+            "Pyrun {} path cannot resolve safely: {}",
+            label, path
+        ));
+    }
+    Ok(path)
 }
 
 fn analyze_remove_path(
@@ -144,34 +170,14 @@ pub(super) fn analyze_output_path(
     initial_cwd: Option<&str>,
     ctx: ExecContext,
 ) -> PermissionResult {
-    let Some(path) = path else {
-        return unresolved_write(ctx, "Pyrun command output path is dynamic".to_string());
-    };
-    if has_unsupported_tilde(&path) {
-        return unresolved_write(
-            ctx,
-            format!(
-                "Pyrun command output path cannot resolve tilde expansion: {}",
-                path
-            ),
-        );
-    }
-    if resolve_path(&path, virtual_cwd, initial_cwd).is_none() {
-        return unresolved_write(
-            ctx,
-            format!("Pyrun command output path cannot resolve safely: {}", path),
-        );
-    }
-    if let Some(result) = analyze_touch_target(&path, config, virtual_cwd, initial_cwd, ctx) {
-        return result;
-    }
-    if ctx.edit_mode || is_allowed_write_path(&path, config, virtual_cwd, initial_cwd) {
-        return allow(format!("Pyrun command output allowed for {}", path));
-    }
-    ask(format!(
-        "Pyrun command output requires approval for {}",
-        path
-    ))
+    analyze_modifying_path(
+        path,
+        "command output",
+        config,
+        virtual_cwd,
+        initial_cwd,
+        ctx,
+    )
 }
 
 /// Edit mode approves writes the way the Write and Edit tools do. A target
