@@ -542,6 +542,12 @@ impl Config {
         path_matches_any(path, &self.ask_paths)
     }
 
+    /// True if a *read* of `path` must prompt: `ask_paths` matches and the path
+    /// is not a Claude Code tool-result spill file (harness-written output).
+    pub fn is_read_protected(&self, path: &str) -> bool {
+        self.is_ask_path(path) && !is_claude_tool_result(path)
+    }
+
     /// True if `path` is on the write-only ask-list. Does not consider `ask_paths`.
     pub fn is_ask_write_path(&self, path: &str) -> bool {
         path_matches_any(path, &self.ask_write_paths)
@@ -584,6 +590,25 @@ fn path_matches_any(path: &str, patterns: &[String]) -> bool {
         }
     }
     false
+}
+
+/// Matches `~/.claude/projects/<project>/<session>/tool-results/<file>`, where
+/// Claude Code saves oversized tool output. Rejects `..` so the prefix cannot
+/// be used to escape into other `~/.claude` files.
+fn is_claude_tool_result(path: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let Some(rest) = Path::new(path)
+        .strip_prefix(Path::new(&home).join(".claude/projects"))
+        .ok()
+    else {
+        return false;
+    };
+    let parts: Vec<_> = rest.components().collect();
+    parts.len() == 4
+        && parts
+            .iter()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+        && parts[2].as_os_str() == "tool-results"
 }
 
 fn canonicalize_for_match(path: &str) -> Option<String> {

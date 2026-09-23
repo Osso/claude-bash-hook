@@ -122,7 +122,7 @@ fn handle_read(hook_input: &HookInput, config: &Config, harness: Harness) -> boo
     let Some(ref path) = hook_input.tool_input.file_path else {
         return true;
     };
-    if config.is_ask_path(path) {
+    if config.is_read_protected(path) {
         output_decision(
             "ask",
             &format!("Read from protected path {}", path),

@@ -682,6 +682,24 @@ fn test_is_main_thread_write_allowed_expands_home() {
 }
 
 #[test]
+fn test_read_protected_exempts_claude_tool_results_only() {
+    let home = std::env::var("HOME").expect("home");
+    let config: Config = toml::from_str(r#"ask_paths = ["~/.claude/*"]"#).unwrap();
+    let projects = format!("{}/.claude/projects/-proj/f7369350-dce0", home);
+
+    assert!(!config.is_read_protected(&format!("{}/tool-results/bqqbou0sm.txt", projects)));
+    assert!(config.is_read_protected(&format!("{}/.claude/settings.json", home)));
+    assert!(config.is_read_protected(&format!("{}/f7369350-dce0.jsonl", projects)));
+    assert!(config.is_read_protected(&format!(
+        "{}/tool-results/../../../../.credentials.json",
+        projects
+    )));
+    assert!(config.is_read_protected(&format!("{}/.claude/tool-results/x.txt", home)));
+    // Tool results stay writable-protected: only reads are exempt.
+    assert!(config.is_write_protected(&format!("{}/tool-results/bqqbou0sm.txt", projects)));
+}
+
+#[test]
 fn test_is_master_push_allowed_for_exact_and_subdir() {
     let root = unique_temp_dir("master-push");
     let subdir = format!("{}/nested", root);

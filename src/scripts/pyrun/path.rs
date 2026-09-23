@@ -154,7 +154,7 @@ fn analyze_read_path(
             path
         ));
     };
-    if config.is_ask_path(&absolute) {
+    if config.is_read_protected(&absolute) {
         return ask(format!(
             "Pyrun filesystem read targets protected path {}",
             path
