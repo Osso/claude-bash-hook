@@ -147,7 +147,26 @@ fn collect_write_redirects(node: Node, source: &[u8], out: &mut Vec<String>) {
         && is_write_redirect(node)
         && let Some(dest) = node.child_by_field_name("destination")
     {
-        out.push(get_text(dest, source));
+        // tree-sitter can split one shell word across a backslash-newline
+        // into several destination fields. Preserve that whole word so quote
+        // removal and protected-path checks see its actual destination.
+        let mut end = dest.end_byte();
+        let mut cursor = node.walk();
+        for next in node
+            .children_by_field_name("destination", &mut cursor)
+            .skip(1)
+        {
+            let gap = &source[end..next.start_byte()];
+            let (continuations, remainder) = gap.as_chunks::<2>();
+            if continuations.is_empty()
+                || !remainder.is_empty()
+                || !continuations.iter().all(|pair| pair == b"\\\n")
+            {
+                break;
+            }
+            end = next.end_byte();
+        }
+        out.push(String::from_utf8_lossy(&source[dest.start_byte()..end]).into_owned());
     }
 
     let mut cursor = node.walk();

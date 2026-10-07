@@ -1043,3 +1043,170 @@ fn test_read_under_protected_not_asked_by_write_guard() {
     let result = analyze_command("cat /usr/bin/foo", &config, ExecContext::default(), None);
     assert_ne!(result.permission, Permission::Ask);
 }
+
+#[test]
+fn test_git_safety_precedes_generic_and_cwd_allow_rules() {
+    for cwd_rule in ["", "cwd = \"/work\""] {
+        let config: Config = toml::from_str(&format!(
+            r#"
+default = "passthrough"
+[[rules]]
+commands = ["git"]
+permission = "allow"
+{cwd_rule}
+"#
+        ))
+        .expect("config");
+        for (command, expected) in [
+            ("git push --force origin main", Permission::Deny),
+            ("git push -f origin master", Permission::Deny),
+            ("git push --force origin feature", Permission::Ask),
+            ("git push origin main", Permission::Ask),
+            ("git push --force-with-lease origin main", Permission::Ask),
+            ("git push origin feature", Permission::Allow),
+            ("git reset --hard", Permission::Deny),
+            ("git checkout existing", Permission::Ask),
+            ("git checkout -b new", Permission::Allow),
+            ("git status", Permission::Allow),
+        ] {
+            let result = analyze_command(command, &config, ExecContext::default(), Some("/work"));
+            assert_eq!(result.permission, expected, "{command}: {}", result.reason);
+        }
+    }
+}
+
+#[test]
+fn test_git_force_guard_preserves_directory_exception_and_bypass() {
+    let config: Config = toml::from_str(
+        r#"
+master_push_allowed = ["/work"]
+[[rules]]
+commands = ["git push"]
+permission = "allow"
+"#,
+    )
+    .expect("config");
+    for (command, expected) in [
+        ("git push origin main", Permission::Allow),
+        ("git push --force-with-lease origin main", Permission::Allow),
+        ("git push --force origin main", Permission::Deny),
+    ] {
+        let result = analyze_command(command, &config, ExecContext::default(), Some("/work"));
+        assert_eq!(result.permission, expected, "{command}: {}", result.reason);
+    }
+    let ctx = ExecContext {
+        bypass: true,
+        ..ExecContext::default()
+    };
+    let result = analyze_command("git push --force origin main", &config, ctx, Some("/work"));
+    assert_eq!(result.permission, Permission::Allow);
+    assert!(result.reason.starts_with("bypassPermissions:"));
+}
+
+#[test]
+fn test_quoted_and_escaped_redirects_into_protected_paths_ask() {
+    let config = write_guard_config();
+    for command in [
+        r#"echo hi > "/etc/hosts""#,
+        "echo hi >> '/etc/hosts'",
+        r#"echo hi 2> /"etc"/'hosts'"#,
+        r#"echo hi &> /e\tc/hosts"#,
+        r#"echo hi >| "/usr/bin/a b""#,
+        r#"echo hi > '/etc/a'\''b'"#,
+        "echo hi > /et\\\nc/hosts",
+        "> '/etc/hosts'",
+    ] {
+        let result = analyze_command(command, &config, ExecContext::default(), None);
+        assert_eq!(
+            result.permission,
+            Permission::Ask,
+            "{command}: {}",
+            result.reason
+        );
+        assert!(result.reason.contains("redirect writes to protected path"));
+    }
+    let result = analyze_command(
+        "echo hi > 'hosts'",
+        &config,
+        ExecContext::default(),
+        Some("/etc"),
+    );
+    assert_eq!(result.permission, Permission::Ask);
+}
+
+#[test]
+fn test_dynamic_redirect_targets_require_approval() {
+    let config = write_guard_config();
+    for command in [
+        r#"echo hi > "$DEST""#,
+        "echo hi > ${DEST}/hosts",
+        "echo hi > $(echo /etc/hosts)",
+        "echo hi > /etc/h*",
+        "echo hi > ~/hosts",
+        "echo hi > $'/etc/hosts'",
+        // A later assignment is not evidence of this redirect's destination.
+        "echo hi > $DEST; DEST=/tmp/safe",
+    ] {
+        let result = analyze_command(command, &config, ExecContext::default(), None);
+        assert_eq!(
+            result.permission,
+            Permission::Ask,
+            "{command}: {}",
+            result.reason
+        );
+    }
+}
+
+#[test]
+fn test_safe_quoted_redirects_and_literal_dollars_remain_allowed() {
+    let config = write_guard_config();
+    for command in [
+        r#"echo hi > "/tmp/a b""#,
+        "echo hi >> '/tmp/a b'",
+        r#"echo hi > /tmp/a\ b"#,
+        "echo hi > '/tmp/$DEST'",
+        r#"echo hi > "/tmp/\$DEST""#,
+        "echo hi 2>&1",
+        "echo hi 2>&-",
+        "cat < '/etc/hosts'",
+    ] {
+        let result = analyze_command(command, &config, ExecContext::default(), None);
+        assert_eq!(
+            result.permission,
+            Permission::Allow,
+            "{command}: {}",
+            result.reason
+        );
+    }
+}
+
+#[test]
+fn test_dynamic_redirect_without_protected_paths_preserves_allow() {
+    let mut config = write_guard_config();
+    config.ask_write_paths.clear();
+    let result = analyze_command(
+        r#"echo hi > "$DEST""#,
+        &config,
+        ExecContext::default(),
+        None,
+    );
+    assert_eq!(result.permission, Permission::Allow);
+}
+
+#[test]
+fn test_redirect_quotes_preserve_literal_backslashes_and_newlines() {
+    let config = write_guard_config();
+    for command in [
+        r#"echo hi > "/etc/a\qb""#,
+        r#"echo hi > "/etc/a\\b""#,
+        "echo hi > '/etc/a\nb'",
+    ] {
+        let result = analyze_command(command, &config, ExecContext::default(), None);
+        assert_eq!(
+            result.permission,
+            Permission::Ask,
+            "{command}: {}",
+            result.reason
+        );
+    }
+}
