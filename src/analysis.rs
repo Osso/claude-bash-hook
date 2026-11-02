@@ -73,12 +73,9 @@ pub fn analyze_with_piped_query(
         prev_cmd = Some(cmd);
     }
 
-    let redirects: Vec<String> = analysis
-        .write_redirects
-        .iter()
-        .map(|target| analyzer::expand_known_vars(target, &analysis.var_values))
-        .collect();
-    if let Some(redirect_result) = check_write_redirects(&redirects, config, initial_cwd) {
+    if let Some(redirect_result) =
+        check_write_redirects(&analysis.write_redirects, config, initial_cwd)
+    {
         most_restrictive = Some(merge_restrictive(most_restrictive, redirect_result));
     }
 
@@ -112,8 +109,20 @@ fn check_write_redirects(
     config: &Config,
     initial_cwd: Option<&str>,
 ) -> Option<PermissionResult> {
+    if config.ask_paths.is_empty() && config.ask_write_paths.is_empty() {
+        return None;
+    }
     for target in redirects {
-        if let Some(abs) = redirect_abs_path(target, initial_cwd)
+        // Decode shell quoting before matching paths. Do not expand from the
+        // global assignment map: it does not model assignment order or scope.
+        let Some(path) = literal_redirect_target(target) else {
+            return Some(PermissionResult {
+                permission: Permission::Ask,
+                reason: "redirect destination is not a static literal".to_string(),
+                suggestion: None,
+            });
+        };
+        if let Some(abs) = redirect_abs_path(&path, initial_cwd)
             && config.is_write_protected(&abs)
         {
             return Some(PermissionResult {
@@ -126,8 +135,59 @@ fn check_write_redirects(
     None
 }
 
+/// Apply quote removal to a single shell word without evaluating it. Unknown
+/// expansions (including ANSI-C quoting) are deliberately left for approval.
+fn literal_redirect_target(raw: &str) -> Option<String> {
+    let mut value = String::new();
+    let mut quote = None;
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    value.push(ch);
+                }
+            }
+            Some('"') => match ch {
+                '"' => quote = None,
+                '$' | '`' => return None,
+                '\\' => {
+                    let next = chars.next()?;
+                    if next != '\n' {
+                        if !matches!(next, '$' | '`' | '"' | '\\') {
+                            value.push('\\');
+                        }
+                        value.push(next);
+                    }
+                }
+                _ => value.push(ch),
+            },
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    let next = chars.next()?;
+                    if next != '\n' {
+                        value.push(next);
+                    }
+                }
+                '$' | '`' | '*' | '?' | '[' | '{' | '}' | '(' | ')' => return None,
+                '~' if value.is_empty() => return None,
+                _ => value.push(ch),
+            },
+            _ => unreachable!(),
+        }
+    }
+    if quote.is_some() || value.is_empty() || value.contains('\0') {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 fn redirect_abs_path(path: &str, initial_cwd: Option<&str>) -> Option<String> {
-    if path.is_empty() || path.contains('\0') || path.contains('\n') {
+    if path.is_empty() || path.contains('\0') {
         return None;
     }
     if std::path::Path::new(path).is_absolute() {
@@ -182,13 +242,6 @@ fn check_analysis_errors(analysis: &analyzer::AnalysisResult) -> Option<Permissi
                 analysis.error.as_deref().unwrap_or_default()
             ),
             suggestion: Some("Fix the syntax error and try again".to_string()),
-        });
-    }
-    if analysis.commands.is_empty() {
-        return Some(PermissionResult {
-            permission: Permission::Allow,
-            reason: "No commands found".to_string(),
-            suggestion: None,
         });
     }
     None
@@ -338,6 +391,13 @@ fn check_single_command(
     // otherwise allow-listed. Unprotected paths return None and fall through.
     if let Some(result) =
         check_filesystem(cmd, config, virtual_cwd, initial_cwd, has_uncertain_flow)
+    {
+        return result;
+    }
+    // Restrictive Git safety checks must precede generic and cwd allow rules.
+    // Leave built-in allowances below the rules to preserve their precedence.
+    if let Some(result) = check_git_special(cmd, config, initial_cwd)
+        && result.permission > Permission::Allow
     {
         return result;
     }
